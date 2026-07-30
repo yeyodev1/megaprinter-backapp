@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import { dbConnect } from "./config/mongo";
 import { createApp } from "./app";
 
-const port = process.env.PORT || 8100;
+const port = process.env.PORT || 8101;
 
 async function main() {
   dotenv.config();

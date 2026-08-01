@@ -10,6 +10,10 @@ const whitelist = [
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:8101",
+  "https://testing-storybrand-frontend.bakano.ec",
+  "https://megaprinter.ec",
+  "https://www.megaprinter.ec",
+  ...(process.env.FRONTEND_URL || "").split(",").map((url) => url.trim()).filter(Boolean),
 ];
 
 const corsOptions: cors.CorsOptions = {

@@ -45,3 +45,6 @@ export function createApp() {
 
   return { app, server };
 }
+
+// Vercel's Node runtime recognizes the Express application as a serverless handler.
+export default createApp().app;

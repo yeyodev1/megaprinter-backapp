@@ -64,7 +64,7 @@ export async function importOffersCatalog(_req: Request, res: Response, next: Ne
       categories.set(name, category.id);
     }
     for (const item of offersCatalog) {
-      await ProductModel.findOneAndUpdate({ name: item.name, description: item.description }, { ...item, category: categories.get(item.category), kind: "product", active: true }, { new: true, upsert: true, setDefaultsOnInsert: true });
+      await ProductModel.findOneAndUpdate({ name: item.name }, { ...item, category: categories.get(item.category), kind: "product", active: true }, { new: true, upsert: true, setDefaultsOnInsert: true });
     }
     res.json({ imported: offersCatalog.length });
   } catch (error) { next(error); }

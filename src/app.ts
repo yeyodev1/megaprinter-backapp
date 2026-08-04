@@ -18,7 +18,7 @@ const whitelist = [
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    if (!origin || whitelist.includes(origin)) {
+    if (!origin || whitelist.includes(origin) || origin.endsWith(".vercel.app")) {
       callback(null, true);
     } else {
       callback(new Error("Not allowed by CORS"));

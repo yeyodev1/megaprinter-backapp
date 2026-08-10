@@ -3,39 +3,117 @@ import jwt from "jsonwebtoken";
 import { NextFunction, Request, Response } from "express";
 import { UserModel } from "../models/user.model";
 import { AdminRequest } from "../middlewares/admin.middleware";
+import { CustomError } from "../errors/customError.error";
 
-const userDto = (user: { _id: { toString(): string }; name: string; email: string; role: string; createdAt?: Date }) => ({ id: user._id.toString(), name: user.name, email: user.email, role: user.role, createdAt: user.createdAt });
+const MIN_PASSWORD_LENGTH = 10;
+
+const userDto = (user: {
+  _id: { toString(): string };
+  name: string;
+  email: string;
+  role: string;
+  createdAt?: Date;
+}) => ({
+  id: user._id.toString(),
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  createdAt: user.createdAt,
+});
 
 export async function ensureInitialAdmin() {
   const email = process.env.INITIAL_ADMIN_EMAIL;
   const password = process.env.INITIAL_ADMIN_PASSWORD;
-  if (!email || !password) throw new Error("INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD are required");
-  if (await UserModel.exists({ email: email.toLowerCase() })) return;
-  await UserModel.create({ name: "Diego Reyes", email, passwordHash: await bcrypt.hash(password, 12), role: "admin" });
-  console.log(`Initial admin created: ${email}`);
+  const name = process.env.INITIAL_ADMIN_NAME || "Administrador";
+
+  if (!email || !password) {
+    // Antes esto lanzaba y tumbaba el arranque entero. Si ya existe un admin en
+    // la base, no hay ninguna razon para impedir que el servidor levante.
+    console.warn(
+      "INITIAL_ADMIN_EMAIL / INITIAL_ADMIN_PASSWORD no definidos: se omite la creación del admin inicial.",
+    );
+    return;
+  }
+
+  // El email se normaliza aqui igual que en la comprobacion. Antes se buscaba
+  // en minusculas pero se creaba con el valor crudo del .env, asi que un email
+  // con mayusculas creaba un admin nuevo en cada arranque y el login (que
+  // tambien normaliza) nunca lo encontraba.
+  const normalisedEmail = email.trim().toLowerCase();
+
+  if (await UserModel.exists({ email: normalisedEmail })) return;
+
+  await UserModel.create({
+    name,
+    email: normalisedEmail,
+    passwordHash: await bcrypt.hash(password, 12),
+    role: "admin",
+  });
+
+  console.log(`Initial admin created: ${normalisedEmail}`);
 }
 
 export async function login(req: Request, res: Response, next: NextFunction) {
   try {
     const { email, password } = req.body;
     const secret = process.env.JWT_SECRET;
-    if (!email || !password || !secret) return res.status(400).json({ error: "Email and password are required" });
-    const user = await UserModel.findOne({ email: String(email).toLowerCase() });
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) return res.status(401).json({ error: "Invalid credentials" });
-    const token = jwt.sign({ email: user.email, role: user.role }, secret, { subject: user._id.toString(), expiresIn: "8h" });
+
+    if (!secret) throw new CustomError("Authentication is not configured", 503);
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email y contraseña son obligatorios" });
+    }
+
+    const user = await UserModel.findOne({ email: String(email).trim().toLowerCase() });
+
+    if (!user || !(await bcrypt.compare(String(password), user.passwordHash))) {
+      return res.status(401).json({ error: "Correo o contraseña incorrectos" });
+    }
+
+    const token = jwt.sign({ email: user.email, role: user.role }, secret, {
+      subject: user._id.toString(),
+      expiresIn: "8h",
+    });
+
     res.json({ token, user: userDto(user) });
-  } catch (error) { next(error); }
+  } catch (error) {
+    next(error);
+  }
 }
 
 export async function listUsers(_req: AdminRequest, res: Response, next: NextFunction) {
-  try { res.json((await UserModel.find().sort({ createdAt: -1 })).map(userDto)); } catch (error) { next(error); }
+  try {
+    const users = await UserModel.find().sort({ createdAt: -1 }).limit(200);
+    res.json(users.map(userDto));
+  } catch (error) {
+    next(error);
+  }
 }
 
 export async function createUser(req: AdminRequest, res: Response, next: NextFunction) {
   try {
     const { name, email, password } = req.body;
-    if (!name || !email || !password || String(password).length < 10) return res.status(400).json({ error: "Name, email, and a 10 character password are required" });
-    const user = await UserModel.create({ name, email: String(email).toLowerCase(), passwordHash: await bcrypt.hash(password, 12), role: "admin" });
+
+    if (!name || !email || !password || String(password).length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        error: `Nombre, correo y una contraseña de al menos ${MIN_PASSWORD_LENGTH} caracteres son obligatorios`,
+      });
+    }
+
+    const normalisedEmail = String(email).trim().toLowerCase();
+
+    if (await UserModel.exists({ email: normalisedEmail })) {
+      return res.status(409).json({ error: "Ya existe un acceso con ese correo" });
+    }
+
+    const user = await UserModel.create({
+      name: String(name).trim(),
+      email: normalisedEmail,
+      passwordHash: await bcrypt.hash(String(password), 12),
+      role: "admin",
+    });
+
     res.status(201).json(userDto(user));
-  } catch (error) { next(error); }
+  } catch (error) {
+    next(error);
+  }
 }

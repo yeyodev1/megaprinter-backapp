@@ -67,8 +67,34 @@ export async function createCategory(req: Request, res: Response, next: NextFunc
 
     const slug = slugify(name);
     if (!slug) return res.status(400).json({ error: "El nombre de la categoría no es válido" });
+    if (await CategoryModel.exists({ slug })) {
+      return res.status(409).json({ error: "Ya existe una categoría con ese nombre" });
+    }
 
     res.status(201).json(await CategoryModel.create({ name, slug }));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateCategory(req: Request, res: Response, next: NextFunction) {
+  try {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const slug = slugify(name);
+    if (!name || !slug) return res.status(400).json({ error: "El nombre de la categoría no es válido" });
+
+    if (await CategoryModel.exists({ slug, _id: { $ne: req.params.id } })) {
+      return res.status(409).json({ error: "Ya existe una categoría con ese nombre" });
+    }
+
+    const category = await CategoryModel.findByIdAndUpdate(
+      req.params.id,
+      { name, slug },
+      { new: true, runValidators: true },
+    );
+    if (!category) return res.status(404).json({ error: "Categoría no encontrada" });
+
+    res.json(category);
   } catch (error) {
     next(error);
   }

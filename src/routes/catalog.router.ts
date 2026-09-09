@@ -9,6 +9,7 @@ import {
   listAllProducts,
   listCategories,
   listProducts,
+  updateCategory,
   updateProduct,
 } from "../controllers/catalog.controller";
 import { requireAdmin } from "../middlewares/admin.middleware";
@@ -31,6 +32,7 @@ const upload = multer({
 
 router.get("/categories", listCategories);
 router.post("/categories", requireAdmin, createCategory);
+router.put("/categories/:id", requireAdmin, updateCategory);
 router.delete("/categories/:id", requireAdmin, deleteCategory);
 
 router.get("/products", listProducts);

@@ -5,7 +5,7 @@ import { UserModel } from "../models/user.model";
 import { AdminRequest } from "../middlewares/admin.middleware";
 import { CustomError } from "../errors/customError.error";
 
-const MIN_PASSWORD_LENGTH = 10;
+const MIN_PASSWORD_LENGTH = 8;
 
 const userDto = (user: {
   _id: { toString(): string };
@@ -113,6 +113,34 @@ export async function createUser(req: AdminRequest, res: Response, next: NextFun
     });
 
     res.status(201).json(userDto(user));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function currentUser(req: AdminRequest, res: Response, next: NextFunction) {
+  try {
+    const user = await UserModel.findById(req.admin?.id);
+    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+    res.json(userDto(user));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function deleteUser(req: AdminRequest, res: Response, next: NextFunction) {
+  try {
+    if (req.params.id === req.admin?.id) {
+      return res.status(400).json({ error: "No puedes eliminar tu propio acceso" });
+    }
+    if ((await UserModel.countDocuments()) <= 1) {
+      return res.status(409).json({ error: "Debe quedar al menos un acceso al panel" });
+    }
+
+    const deleted = await UserModel.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    res.status(204).end();
   } catch (error) {
     next(error);
   }

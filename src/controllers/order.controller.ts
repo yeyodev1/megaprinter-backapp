@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import axios from "axios";
-import { OrderModel } from "../models/order.model";
+import { ORDER_STATUSES, OrderModel, OrderStatus } from "../models/order.model";
 
 const PAYPHONE_CONFIRM_URL = "https://paymentbox.payphonetodoesposible.com/api/confirm";
 const PAYPHONE_APPROVED = 3;
@@ -238,6 +238,26 @@ export async function listOrders(req: Request, res: Response, next: NextFunction
     const skip = Math.max(Number(req.query.skip) || 0, 0);
 
     res.json(await OrderModel.find().sort({ createdAt: -1 }).skip(skip).limit(limit));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateOrderStatus(req: Request, res: Response, next: NextFunction) {
+  try {
+    const status = req.body?.status as OrderStatus;
+    if (!ORDER_STATUSES.includes(status)) {
+      return res.status(400).json({ error: "Estado de pedido no válido" });
+    }
+
+    const order = await OrderModel.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true, runValidators: true },
+    );
+    if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+
+    res.json(order);
   } catch (error) {
     next(error);
   }

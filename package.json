@@ -8,7 +8,9 @@
     "compile": "tsc --watch",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "start": "node dist/index.js",
-    "format": "prettier --write 'src/**/*.{js,jsx,ts,tsx,json,css,scss,md}'"
+    "format": "prettier --write 'src/**/*.{js,jsx,ts,tsx,json,css,scss,md}'",
+    "catalog:upload": "ts-node-dev --transpile-only scripts/upload-catalog-images.ts",
+    "catalog:import": "ts-node-dev --transpile-only scripts/import-offers.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",

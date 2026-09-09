@@ -1,18 +1,8 @@
 import { NextFunction, Request, Response } from "express";
 import { CategoryModel } from "../models/category.model";
 import { ProductModel } from "../models/product.model";
-import { offersCatalog } from "../data/offersCatalog";
-
-const slugify = (value: string) =>
-  value
-    .toLowerCase()
-    .trim()
-    .normalize("NFD")
-    // Se quitan las tildes antes de generar el slug: sin esto "Monitores Gráficos"
-    // producia "monitores-gr-ficos".
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
+import { importOffersCatalog as runOffersImport } from "../services/catalogImport.service";
+import { slugify } from "../utils/slugify";
 
 /**
  * Lista blanca de campos editables. Antes se hacia `ProductModel.create(req.body)`,
@@ -29,6 +19,12 @@ const productPayload = (body: Record<string, any>) => {
   if (body.kind === "product" || body.kind === "service") payload.kind = body.kind;
   if (typeof body.active === "boolean") payload.active = body.active;
 
+  // Precio anterior: vacio, 0 o null significa "sin oferta".
+  if (body.originalPrice !== undefined) {
+    const value = body.originalPrice === null || body.originalPrice === "" ? 0 : Number(body.originalPrice);
+    payload.originalPrice = value > 0 ? value : null;
+  }
+
   if (Array.isArray(body.specifications)) {
     payload.specifications = body.specifications
       .filter((spec: any) => spec && typeof spec.label === "string" && typeof spec.value === "string")
@@ -37,6 +33,23 @@ const productPayload = (body: Record<string, any>) => {
   }
 
   return payload;
+};
+
+/**
+ * Valida la relacion entre precio y precio anterior. Un "antes" menor o igual
+ * al precio actual mostraria un descuento negativo en la tienda.
+ */
+const priceError = (payload: Record<string, unknown>, current?: { price: number; originalPrice?: number | null }) => {
+  const price = typeof payload.price === "number" ? payload.price : current?.price;
+  const originalPrice =
+    payload.originalPrice !== undefined ? (payload.originalPrice as number | null) : current?.originalPrice ?? null;
+
+  if (typeof price === "number" && Number.isNaN(price)) return "El precio no es válido";
+  if (originalPrice !== null && Number.isNaN(originalPrice)) return "El precio anterior no es válido";
+  if (originalPrice !== null && typeof price === "number" && originalPrice <= price) {
+    return "El precio anterior debe ser mayor al precio actual";
+  }
+  return null;
 };
 
 export async function listCategories(_req: Request, res: Response, next: NextFunction) {
@@ -116,6 +129,9 @@ export async function createProduct(req: Request, res: Response, next: NextFunct
       return res.status(400).json({ error: "La categoría seleccionada no existe" });
     }
 
+    const invalid = priceError(payload);
+    if (invalid) return res.status(400).json({ error: invalid });
+
     const product = await ProductModel.create(payload);
     res.status(201).json(await product.populate("category", "name slug"));
   } catch (error) {
@@ -130,6 +146,12 @@ export async function updateProduct(req: Request, res: Response, next: NextFunct
     if (payload.category && !(await CategoryModel.exists({ _id: payload.category }))) {
       return res.status(400).json({ error: "La categoría seleccionada no existe" });
     }
+
+    const current = await ProductModel.findById(req.params.id, "price originalPrice");
+    if (!current) return res.status(404).json({ error: "Producto no encontrado" });
+
+    const invalid = priceError(payload, current);
+    if (invalid) return res.status(400).json({ error: invalid });
 
     const product = await ProductModel.findByIdAndUpdate(req.params.id, payload, {
       new: true,
@@ -157,26 +179,7 @@ export async function deleteProduct(req: Request, res: Response, next: NextFunct
 
 export async function importOffersCatalog(_req: Request, res: Response, next: NextFunction) {
   try {
-    const categories = new Map<string, string>();
-
-    for (const name of ["Laptops", "Monitores"]) {
-      const category = await CategoryModel.findOneAndUpdate(
-        { slug: slugify(name) },
-        { name, slug: slugify(name) },
-        { new: true, upsert: true, setDefaultsOnInsert: true },
-      );
-      categories.set(name, category.id);
-    }
-
-    for (const item of offersCatalog) {
-      await ProductModel.findOneAndUpdate(
-        { name: item.name },
-        { ...item, category: categories.get(item.category), kind: "product", active: true },
-        { new: true, upsert: true, setDefaultsOnInsert: true },
-      );
-    }
-
-    res.json({ imported: offersCatalog.length });
+    res.json(await runOffersImport());
   } catch (error) {
     next(error);
   }

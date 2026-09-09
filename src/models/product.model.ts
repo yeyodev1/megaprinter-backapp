@@ -5,6 +5,9 @@ const productSchema = new Schema(
     name: { type: String, required: true, trim: true },
     description: { type: String, required: true, trim: true },
     price: { type: Number, required: true, min: 0 },
+    // Precio anterior (tachado en la tienda). `null` significa "sin oferta";
+    // asi el panel puede quitar la oferta con un simple PUT en vez de $unset.
+    originalPrice: { type: Number, min: 0, default: null },
     imageUrl: { type: String, default: "", trim: true },
     specifications: [
       {

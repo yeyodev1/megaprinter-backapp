@@ -71,7 +71,9 @@ export async function login(req: Request, res: Response, next: NextFunction) {
 
     const token = jwt.sign({ email: user.email, role: user.role }, secret, {
       subject: user._id.toString(),
-      expiresIn: "8h",
+      // La sesion del panel se conserva en el navegador; el token dura 30 dias
+      // para que el equipo no tenga que volver a ingresar cada jornada.
+      expiresIn: "30d",
     });
 
     res.json({ token, user: userDto(user) });

@@ -647,7 +647,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   if (extraction.intent === "fuera_de_tema") {
     return reply(
       state,
-      resume(`Ay, eso no lo sé responder 🙈 Yo solo te ayudo con cosas de *Megaprinter*: equipos, impresoras, cámaras, servicio técnico y tus pedidos 💻🖨️✨`),
+      resume(`Uy, eso se me escapa 🙈 Pero en todo lo de *Megaprinter* cuenta conmigo siempre: equipos, impresoras, cámaras, servicio técnico y tus pedidos 💻🖨️✨`),
       "R8:fuera_de_tema",
     );
   }
@@ -678,7 +678,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
 
   // R9: saludo o algo que no se entendio: se retoma el paso pendiente.
   if (isGreeting(message) && !state.cart.length) {
-    return reply(state, `Hola! 👋💙 Soy *${botName()}*, la asistente virtual de *Megaprinter* ✨ ${ASK_PRODUCT}`, "R9:saludo");
+    return reply(state, `Hola! 👋💙 Soy *${botName()}* 🤖, tu agente de *Megaprinter* ✨ Pídeme lo que necesites, aquí estoy para ayudarte siempre 🙌\n\n${ASK_PRODUCT}`, "R9:saludo");
   }
   if (state.stage === "choosing") {
     return reply(state, "No te entendí 🙏 Responde con el número de la opción que quieres, o dime qué otra cosa buscas.", "R9:eleccion_no_entendida");

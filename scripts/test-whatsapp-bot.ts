@@ -228,7 +228,7 @@ async function main() {
     const fake = fakeDeps({ banks: FOUR_BANKS });
     const results = await conversation(fake, ["hola", "monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "transferencia", "2", "no", "si", "si"]);
     for (const result of results) assert.doesNotMatch(result.reply, /[¿¡]/, result.decision);
-    assert.match(results[0].reply, /Soy \*Mila\*, la asistente virtual/);
+    assert.match(results[0].reply, /Soy \*Mila\* 🤖, tu agente de \*Megaprinter\*[\s\S]*ayudarte siempre/);
   });
 
   await test("fuera de tema (política de Meta): no responde y vuelve a Megaprinter", async () => {

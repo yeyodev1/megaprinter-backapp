@@ -1,0 +1,29 @@
+import { BotEventModel } from "../../models/botEvent.model";
+
+export interface BotEventInput {
+  phone: string;
+  endpoint: string;
+  kind: "decision" | "turn" | "error";
+  route?: string;
+  decision?: string;
+  intent?: string;
+  step?: string;
+  message?: string;
+  reply?: string;
+  mediaUrl?: string;
+  orderNumber?: string;
+  duplicated?: boolean;
+  error?: string;
+  durationMs?: number;
+}
+
+/** Registra un paso del bot. Nunca bloquea ni rompe la respuesta a BuilderBot. */
+export function logBotEvent(event: BotEventInput) {
+  if (!event.phone) return;
+  void BotEventModel.create({
+    ...event,
+    message: (event.message || "").slice(0, 1000),
+    reply: (event.reply || "").slice(0, 2000),
+    error: (event.error || "").slice(0, 500),
+  }).catch((error) => console.error("[whatsapp-bot] no se pudo registrar la actividad:", error?.message || error));
+}

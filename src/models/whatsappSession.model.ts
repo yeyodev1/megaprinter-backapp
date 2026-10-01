@@ -13,6 +13,8 @@ const whatsappSessionSchema = new Schema(
         _id: false,
         role: { type: String, enum: ["user", "assistant"] },
         content: String,
+        // Foto o PDF que mando el cliente (para verla desde el panel).
+        mediaUrl: { type: String },
         createdAt: { type: Date, default: Date.now },
       },
     ],

@@ -5,6 +5,7 @@ import { ProductModel } from "../models/product.model";
 import { WhatsAppSessionModel } from "../models/whatsappSession.model";
 import { notifyNewOrder } from "../services/email.service";
 import { geminiEnabled } from "../services/gemini.service";
+import { logBotEvent } from "../services/whatsappBot/activity";
 import {
   attachReceipt,
   bankDetails,
@@ -451,7 +452,7 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
     );
 
     const userEntry = message || (mediaUrl ? "[archivo adjunto]" : "");
-    if (userEntry) history.push({ role: "user", content: userEntry.slice(0, 2000), createdAt: new Date() });
+    if (userEntry) history.push({ role: "user", content: userEntry.slice(0, 2000), ...(mediaUrl ? { mediaUrl } : {}), createdAt: new Date() });
     history.push({ role: "assistant", content: result.reply.slice(0, 2000), createdAt: new Date() });
 
     await WhatsAppSessionModel.updateOne(
@@ -526,15 +527,34 @@ export async function whatsappBotDecide(req: Request, res: Response) {
     if (!phone) return res.json({ success: false, route: "conversation", decision: "sin telefono", message: "" });
     if (isResetKeyword(message)) return res.json({ success: true, route: "conversation", decision: "reinicio", message: "" });
 
+    const startedAt = Date.now();
     const session: any = await WhatsAppSessionModel.findOne({ phone }, { state: 1 }).lean();
     const { route, reason } = decideRoute(session?.state, { message, mediaUrl, mediaEvent: Boolean(mediaEventKind(body)) }, {
       bank: Boolean(await bankDetails()),
       cardEnabled: cardEnabled(),
     });
     console.log(`[whatsapp-bot] ${phone} decide → ${route} (${reason})`);
+    logBotEvent({
+      phone,
+      endpoint: "brain",
+      kind: "decision",
+      route,
+      decision: reason,
+      step: session?.state?.stage || "idle",
+      message: message || (mediaUrl ? "[archivo adjunto]" : ""),
+      mediaUrl,
+      durationMs: Date.now() - startedAt,
+    });
     res.json({ success: true, route, decision: reason, step: session?.state?.stage || "idle", message: "" });
   } catch (error) {
     console.error("[whatsapp-bot] error en brain:", error);
+    logBotEvent({
+      phone: readPhone(input(req)),
+      endpoint: "brain",
+      kind: "error",
+      message: readMessage(input(req)),
+      error: error instanceof Error ? error.message : String(error),
+    });
     // Ante cualquier falla, a conversacion: ese flujo siempre responde algo.
     res.json({ success: false, route: "conversation", decision: "error", message: "" });
   }
@@ -546,10 +566,42 @@ export async function whatsappBotDecide(req: Request, res: Response) {
  * `message`: el turno es la unica fuente de verdad, la ruta solo elige la puerta.
  */
 export async function whatsappBotTurn(req: Request, res: Response) {
+  const body = input(req);
+  const startedAt = Date.now();
+  // Endpoint del flujo que llamo (conversation, checkout, media...), para la bitacora.
+  const endpoint = req.path.split("/").filter(Boolean).pop() || "turn";
+  const phone = readPhone(body);
+  const message = readMessage(body) || (readMediaUrl(body) ? "[archivo adjunto]" : "");
   try {
-    res.json(toBotResponse(await runTurn(input(req))));
+    const result = await runTurn(body);
+    if (result) {
+      logBotEvent({
+        phone,
+        endpoint,
+        kind: "turn",
+        route: result.route,
+        decision: result.decision,
+        intent: result.intent,
+        step: result.step,
+        message,
+        reply: result.reply,
+        mediaUrl: readMediaUrl(body),
+        orderNumber: result.orderNumber || "",
+        duplicated: Boolean((result as any).duplicated),
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    res.json(toBotResponse(result));
   } catch (error) {
     console.error("[whatsapp-bot] error en el turno:", error);
+    logBotEvent({
+      phone,
+      endpoint,
+      kind: "error",
+      message,
+      error: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - startedAt,
+    });
     res.json({ ...BOT_FALLBACK, message: ERROR_MESSAGE });
   }
 }

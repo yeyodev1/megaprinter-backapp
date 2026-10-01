@@ -229,7 +229,20 @@ async function main() {
     const fake = fakeDeps({ banks: FOUR_BANKS });
     const results = await conversation(fake, ["hola", "monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "transferencia", "2", "no", "si", "si"]);
     for (const result of results) assert.doesNotMatch(result.reply, /[¿¡]/, result.decision);
-    assert.match(results[0].reply, /Soy \*Mila\* 🤖, tu agente de \*Megaprinter\*[\s\S]*ayudarte siempre/);
+    assert.match(results[0].reply, /Soy \*Mila\* 🤖, el bot de \*Megaprinter\*[\s\S]*ayudarte siempre/);
+  });
+
+  await test("transparencia: si preguntan si es un bot, dice que sí", async () => {
+    for (const question of ["eres un bot?", "hablo con una persona o con un robot?", "eres real?", "estoy hablando con una ia?"]) {
+      const result = (await conversation(fakeDeps(), [question]))[0];
+      assert.equal(result.decision, "R2:soy_un_bot", question);
+      assert.match(result.reply, /Sí, soy un bot 🤖[\s\S]*\*asesor\*/);
+    }
+    assert.equal((await conversation(fakeDeps(), ["quiero hablar con un asesor"]))[0].route, "human");
+    const on = { bank: true, cardEnabled: true };
+    assert.equal(decideRoute(null, { message: "hablo con una persona?" }, on).route, "conversation");
+    assert.equal(decideRoute(null, { message: "quiero hablar con una persona" }, on).route, "human");
+    assert.equal(keepsData("Sí, soy un bot 🤖", "Claro, te ayudo 😊"), false, "la IA no puede borrar que es un bot");
   });
 
   await test("fuera de tema (política de Meta): no responde y vuelve a Megaprinter", async () => {

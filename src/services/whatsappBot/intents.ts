@@ -63,3 +63,7 @@ export const orderNumberIn = (text: string) => text.match(/\bMP-?\s?(\d{1,6})\b/
 /** Pide que no le escriban mas (politica de Meta: se respeta y se confirma). */
 export const wantsOptOut = (text: string) =>
   has(text, /\b(no me escribas|no me vuelvas a escribir|deja de escribir(me)?|no quiero (mas )?mensajes|stop|darme de baja|no molestar|no gracias)\b/);
+
+/** "eres un bot?", "hablo con una persona?", "eres real?": se responde con la verdad (soy un bot). */
+export const asksIfBot = (text: string) =>
+  has(text, /\b(eres (un |una )?(bot|robot|ia|inteligencia artificial|maquina|persona|humano|humana|real)|(hablo|estoy hablando) con (un |una )?(bot|robot|maquina|persona|humano|humana|ia)|es (un )?(bot|automatico)|sos (un )?bot)\b/);

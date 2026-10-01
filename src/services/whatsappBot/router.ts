@@ -2,7 +2,7 @@ import { BankDetails, bankText } from "../transfer.service";
 import { detectBank } from "../banks";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot } from "./intents";
 
 /**
  * MAQUINA DE ESTADOS DEL BOT DE WHATSAPP.
@@ -457,10 +457,19 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     return reply(state, "Listo, no te escribo más 🙊💙 Si algún día me necesitas, aquí estoy para ayudarte ✨", "R0:no_escribir");
   }
 
+  // Transparencia: si pregunta si es un bot o una persona, se le dice la verdad.
+  if (asksIfBot(message)) {
+    return reply(
+      state,
+      `Sí, soy un bot 🤖 Soy *${botName()}*, el bot de *Megaprinter*, y te ayudo con productos, pagos y pedidos las 24 horas 💙 Si prefieres hablar con una persona del equipo, escríbeme *asesor* 🙌`,
+      "R2:soy_un_bot",
+    );
+  }
+
   // R2: pedir una persona.
   if (wantsHuman(message)) {
     const contact = deps.supportPhone ? ` También puedes escribir directo al ${deps.supportPhone}.` : "";
-    return reply(state, `Claro! Te paso con una persona del equipo de Megaprinter 🙌💙 En un ratito te escribe por aquí.${contact}`, "R2:humano", {
+    return reply(state, `Claro! Te paso con una persona real del equipo de Megaprinter 🙌💙 En un ratito te escribe por aquí.${contact}`, "R2:humano", {
       intent: "dudas",
       route: "human",
     });
@@ -678,7 +687,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
 
   // R9: saludo o algo que no se entendio: se retoma el paso pendiente.
   if (isGreeting(message) && !state.cart.length) {
-    return reply(state, `Hola! 👋💙 Soy *${botName()}* 🤖, tu agente de *Megaprinter* ✨ Pídeme lo que necesites, aquí estoy para ayudarte siempre 🙌\n\n${ASK_PRODUCT}`, "R9:saludo");
+    return reply(state, `Hola! 👋💙 Soy *${botName()}* 🤖, el bot de *Megaprinter* y tu agente para lo que necesites ✨ Pídeme lo que necesites, aquí estoy para ayudarte siempre 🙌\n\n${ASK_PRODUCT}`, "R9:saludo");
   }
   if (state.stage === "choosing") {
     return reply(state, "No te entendí 🙏 Responde con el número de la opción que quieres, o dime qué otra cosa buscas.", "R9:eleccion_no_entendida");
@@ -717,6 +726,8 @@ export function decideRoute(
 
   if (input.mediaUrl || (input.mediaEvent && !message)) return { route: "media", reason: "archivo adjunto" };
   if (!message) return { route: "conversation", reason: "mensaje vacio" };
+  // "hablo con una persona?" es una pregunta (se responde que es un bot), no un pedido de asesor.
+  if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
   if (wantsTracking(message) || orderNumberIn(message)) return { route: "searchOrder", reason: "consulta de pedido" };
   if (state.stage === "confirm" && isYes(message)) {

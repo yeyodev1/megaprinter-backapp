@@ -7,7 +7,7 @@ devuelve (ids del catálogo, correo, precios) y si Gemini falla sigue con reglas
 
 ## Personalidad: Mila
 
-El bot es **Mila** 🤖, *tu agente de Megaprinter* (nombre configurable con `BOT_NAME`): siempre
+El bot es **Mila** 🤖, *el bot de Megaprinter y tu agente para lo que necesites* (nombre configurable con `BOT_NAME`): siempre
 amigable y dispuesta a ayudar ("pídeme lo que necesites"), cercana, nada formal, tutea y usa emojis. Signos de pregunta y exclamación **solo al
 final** ("Cómo prefieres pagar?"), nunca "¿" ni "¡": un filtro final los quita de todo lo que sale,
 incluidas las respuestas de Gemini.
@@ -26,7 +26,7 @@ IA cambia un dato, tarda más de 8 s o falla, se envía el texto original. `BOT_
 | Desde el 15-ene-2026 se prohíben los chatbots de **propósito general** (asistentes tipo ChatGPT); solo bots de un negocio concreto | Gemini solo responde sobre el catálogo, pedidos y servicio de Megaprinter. Lo que no es del negocio (tareas, recetas, política, programación…) se clasifica `fuera_de_tema` y Mila redirige con amabilidad (`R8:fuera_de_tema`). |
 | Escalamiento a una persona | "asesor", reclamo o garantía → `route = human` → flujo 🙋 Asesor humano + Silenciar. |
 | Responder dentro de 30 s | `/brain` decide sin IA (milisegundos). Los flujos usan Gemini con timeout de 12–15 s; si falla, siguen con reglas. |
-| Transparencia | Mila se presenta con 🤖 como *tu agente de Megaprinter*. Ofrece ayuda con "lo que necesites" (no "lo que sea"): todo dentro del negocio. |
+| Transparencia: decir que es un bot | Mila se presenta como *"el bot de Megaprinter"* 🤖. Si preguntan "eres un bot?", "hablo con una persona?" o "eres real?", responde *"Sí, soy un bot 🤖"* y ofrece *asesor* (`R2:soy_un_bot`). La voz con IA no puede quitar la palabra "bot" ni decir que es una persona. Ofrece ayuda con "lo que necesites" (no "lo que sea"): todo dentro del negocio. |
 | Respetar a quien no quiere mensajes | "no me escribas", "stop", "no gracias" → Mila lo confirma y queda marcado (`optOut`). |
 | Mensajes fuera de plantilla solo dentro de la ventana de 24 h que abre el cliente; **cobrados desde el 1-oct-2026** | El bot **solo responde** (`{message}`) a lo que escribe el cliente: un mensaje por turno, nunca escribe primero. No hay envíos salientes ni recordatorios automáticos. |
 

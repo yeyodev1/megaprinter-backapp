@@ -5,7 +5,15 @@ import { ProductModel } from "../models/product.model";
 import { WhatsAppSessionModel } from "../models/whatsappSession.model";
 import { notifyNewOrder } from "../services/email.service";
 import { geminiEnabled } from "../services/gemini.service";
-import { attachReceipt, bankDetails, describeImage, downloadReceipt, isAcceptedReceipt } from "../services/transfer.service";
+import {
+  attachReceipt,
+  bankDetails,
+  describeImage,
+  downloadReceipt,
+  isAcceptedReceipt,
+  mediaKindFromMime,
+  probeMediaKind,
+} from "../services/transfer.service";
 import { BotProduct, catalogOverview } from "../services/whatsappBot/catalog";
 import { aiExtract, heuristicExtract } from "../services/whatsappBot/extractor";
 import {
@@ -182,7 +190,14 @@ export function readMediaUrl(body: any) {
   return candidates.map(clean).find((value) => /^https?:\/\//i.test(value)) || "";
 }
 
-const hasMediaEvent = (body: any) => /media|image|document|file|imagen/i.test(rawText(body).match(EVENT)?.[1] || "");
+/** Tipo de archivo segun el evento de BuilderBot ("_event_video__…", "_event_voice_note__…"). */
+function mediaEventKind(body: any): "video" | "audio" | "file" | undefined {
+  const name = rawText(body).match(EVENT)?.[1] || "";
+  if (!name || /location|ubicacion/i.test(name)) return undefined;
+  if (/video/i.test(name)) return "video";
+  if (/voice|audio|note/i.test(name)) return "audio";
+  return "file";
+}
 
 // ─── Dependencias reales del router ──────────────────────────────────────────
 
@@ -254,25 +269,58 @@ async function transferOrderFor(phone: string, orderId: string) {
   return OrderModel.findOne({ ...open, $or: [{ whatsappPhone: { $in: variants } }, { customerPhone: { $in: variants } }] }).sort({ createdAt: -1 });
 }
 
-async function receiveReceipt(phone: string, orderId: string, mediaUrl: string): Promise<ReceiptOutcome> {
+/**
+ * Archivo del cliente. La IA mira primero QUE es: solo un comprobante real se
+ * guarda en el pedido por transferencia; una foto de producto (o captura de
+ * Instagram) se cruza con el catalogo; videos y audios no se procesan.
+ */
+async function receiveMedia(phone: string, orderId: string, mediaUrl: string): Promise<ReceiptOutcome> {
   try {
-    const file = await downloadReceipt(mediaUrl);
+    const probed = await probeMediaKind(mediaUrl);
+    if (probed) return { status: probed };
+
+    let file;
+    try {
+      file = await downloadReceipt(mediaUrl);
+    } catch (error: any) {
+      // Archivos de mas de 10 MB: casi siempre videos.
+      if (/maxContentLength/i.test(String(error?.message))) return { status: "video" };
+      throw error;
+    }
+    const kind = mediaKindFromMime(file.mimeType);
+    if (kind) return { status: kind };
     if (!isAcceptedReceipt(file.mimeType)) return { status: "unsupported" };
+
     const order = await transferOrderFor(phone, orderId);
-    // Sin pedido por transferencia pendiente, la IA mira que es: un comprobante
-    // suelto, la foto de un producto ("¿tienen esta?") u otra cosa.
-    if (!order) return { status: "no_order", image: (await describeImage(file)) || undefined };
-    const { analysis } = await attachReceipt(order, file, "whatsapp");
+    const storeReceipt = async (): Promise<ReceiptOutcome> => {
+      if (!order) return { status: "no_order" };
+      const { analysis } = await attachReceipt(order, file, "whatsapp");
+      return {
+        status: "stored",
+        orderNumber: order.orderNumber || String(order._id),
+        total: order.totalAmount,
+        detectedAmount: analysis?.detectedAmount ?? null,
+        amountMatches: analysis?.amountMatches ?? null,
+        isReceipt: analysis?.isReceipt ?? null,
+      };
+    };
+
+    // Un PDF se trata como comprobante. Sin IA disponible, tambien (comportamiento seguro).
+    if (!file.mimeType.startsWith("image/")) return storeReceipt();
+    const insight = await describeImage(file, await loadCatalog());
+    if (!insight || insight.kind === "receipt") return storeReceipt();
+
     return {
-      status: "stored",
-      orderNumber: order.orderNumber || String(order._id),
-      total: order.totalAmount,
-      detectedAmount: analysis?.detectedAmount ?? null,
-      amountMatches: analysis?.amountMatches ?? null,
-      isReceipt: analysis?.isReceipt ?? null,
+      status: "image",
+      kind: insight.kind,
+      description: insight.description,
+      searchQuery: insight.searchQuery,
+      productIds: insight.productIds,
+      exactMatch: insight.exactMatch,
+      pendingOrderNumber: order?.orderNumber || undefined,
     };
   } catch (error) {
-    console.error("[whatsapp-bot] no se pudo guardar el comprobante:", error instanceof Error ? error.message : error);
+    console.error("[whatsapp-bot] no se pudo procesar el archivo:", error instanceof Error ? error.message : error);
     return { status: "error" };
   }
 }
@@ -302,7 +350,7 @@ async function buildDeps(phone: string): Promise<BotDeps> {
     loadCatalog,
     extract: geminiEnabled() ? aiExtract : heuristicExtract,
     createOrder: (state) => createBotOrder(phone, state),
-    receiveReceipt: (orderId, mediaUrl) => receiveReceipt(phone, orderId, mediaUrl),
+    receiveReceipt: (orderId, mediaUrl) => receiveMedia(phone, orderId, mediaUrl),
     findOrders: (orderNumber) => findOrders(phone, orderNumber),
     bank: await bankDetails(),
     cardEnabled: cardEnabled(),
@@ -392,7 +440,13 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
 
     const result = await handleTurn(
       previous,
-      { message, mediaUrl: mediaUrl || undefined, mediaWithoutUrl: !mediaUrl && hasMediaEvent(body), history: recent },
+      {
+        message,
+        mediaUrl: mediaUrl || undefined,
+        mediaWithoutUrl: !mediaUrl && Boolean(mediaEventKind(body)),
+        mediaEvent: mediaEventKind(body),
+        history: recent,
+      },
       await buildDeps(phone),
     );
 
@@ -473,7 +527,7 @@ export async function whatsappBotDecide(req: Request, res: Response) {
     if (isResetKeyword(message)) return res.json({ success: true, route: "conversation", decision: "reinicio", message: "" });
 
     const session: any = await WhatsAppSessionModel.findOne({ phone }, { state: 1 }).lean();
-    const { route, reason } = decideRoute(session?.state, { message, mediaUrl }, {
+    const { route, reason } = decideRoute(session?.state, { message, mediaUrl, mediaEvent: Boolean(mediaEventKind(body)) }, {
       bank: Boolean(await bankDetails()),
       cardEnabled: cardEnabled(),
     });
@@ -500,11 +554,12 @@ export async function whatsappBotTurn(req: Request, res: Response) {
   }
 }
 
-/** POST /whatsapp-bot/transfer-receipt: foto o PDF del comprobante (flujo de imagen/documento). */
+/** POST /whatsapp-bot/media (alias /transfer-receipt): fotos, PDF, videos y audios del cliente. */
 export async function whatsappBotTransferReceipt(req: Request, res: Response) {
   const body = input(req);
   // Sin archivo pero con texto ("¿cuanto era?"): se atiende como conversacion normal.
-  if (!readMediaUrl(body) && !readMessage(body)) {
+  // Un evento de video/audio sin URL tambien pasa: el turno responde que no se procesa.
+  if (!readMediaUrl(body) && !readMessage(body) && !mediaEventKind(body)) {
     return res.json({ ...BOT_FALLBACK, success: false, message: "No logré abrir tu archivo 😕 ¿Me reenvías la foto del comprobante?" });
   }
   return whatsappBotTurn(req, res);

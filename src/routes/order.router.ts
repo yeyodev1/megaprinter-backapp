@@ -56,6 +56,7 @@ router.all("/whatsapp-bot/search-order", whatsappBotTurn);
 router.all("/whatsapp-bot/human", whatsappBotTurn);
 router.all("/whatsapp-bot/assistant", whatsappBotTurn);
 router.all("/whatsapp-bot/catalog", whatsappBotCatalog);
+router.all("/whatsapp-bot/media", whatsappBotTransferReceipt);
 router.all("/whatsapp-bot/transfer-receipt", whatsappBotTransferReceipt);
 
 export default router;

@@ -38,7 +38,7 @@ Base: `https://megaprinter-backapp.vercel.app/api/orders/whatsapp-bot`
 | `POST /search-order` | Turno completo (estado de pedidos, "ya transferí", MP-). |
 | `POST /human` | Turno completo (aviso de que lo atiende una persona). |
 | `GET\|POST /catalog` | Turno completo; sin mensaje, solo el resumen del catálogo. |
-| `POST /transfer-receipt` | Comprobante (foto o PDF); con texto, turno normal. |
+| `POST /media` | Fotos, PDF, videos y audios (alias `/transfer-receipt`). |
 
 Todas responden **HTTP 200** siempre (un 4xx/5xx deja al cliente sin respuesta).
 
@@ -84,7 +84,16 @@ mensaje completo (saca los datos, arma el carrito, crea el pedido) y responde en
 
 Base: `https://megaprinter-backapp.vercel.app/api/orders/whatsapp-bot`.
 Todos los nodos HTTP: `POST`, header `Content-Type: application/json`, Body con campos (RAW apagado),
-`rawMessage = {body}`, `phone = {from}`.
+`rawMessage = {body}`, `phone = {from}`, `history = {history}`, `urlTempFile = {urlTempFile}`.
+
+### Archivos (`/media`)
+La IA mira cada foto antes de decidir:
+- **Comprobante** + pedido por transferencia pendiente → se guarda en el pedido (por revisar en el panel).
+- **Comprobante** sin pedido → le pide su número MP-.
+- **Foto o captura (incluso de Instagram) de un producto** → la cruza con el catálogo: "¡Sí lo tenemos!",
+  "estos son los más parecidos" o "no lo tenemos, un asesor te cotiza si lo conseguimos".
+- **Otra imagen** → no se guarda como pago; si tiene una transferencia pendiente se lo recuerda.
+- **Videos y audios** → no se procesan: pide una foto o captura de lo que busca.
 
 ### Flujo Principal (evento GENERAL) → `/brain`, Enviar al cliente APAGADO
 
@@ -97,7 +106,7 @@ Todos los nodos HTTP: `POST`, header `Content-Type: application/json`, Body con 
 | `checkoutAdvisor` | Dice "sí" pero no hay método de pago activo | Checkout asesor | `/checkout` |
 | `searchOrder` | Pregunta por su pedido, "ya transferí" o escribe un MP- | Consultar pedido | `/search-order` |
 | `human` | Pide un asesor, reclamo o garantía | Asesor humano | `/human` |
-| `receipt` | Llega un archivo (si el evento entra por GENERAL) | Comprobante | `/transfer-receipt` |
+| `media` | Llega foto, PDF, video o audio | Imágenes y comprobantes | `/media` |
 
 ### Flujos destino → Enviar al cliente ENCENDIDO con `{message}`
 
@@ -121,8 +130,8 @@ Excepciones: **Asesor humano** no lleva Rules (después del HTTP va el paso Sile
 | Checkout asesor | `/checkout` | Rules comunes → Silenciar bot |
 | Consultar pedido | `/search-order` | Rules comunes ("ya transferí" → Esperar comprobante) |
 | Asesor humano | `/human` | Paso Silenciar (60 min) |
-| Esperar comprobante | paso esperar respuesta → `/transfer-receipt` + `urlTempFile` | Rule `human` → Silenciar bot |
-| Comprobante (evento MEDIA/DOCUMENTO) | `/transfer-receipt` + `urlTempFile` | Sin Rules |
+| Esperar comprobante | paso esperar respuesta → `/media` | Rule `human` → Silenciar bot |
+| Imágenes y comprobantes (evento MEDIA/DOCUMENTO) | `/media` | Sin Rules |
 | Silenciar bot | — | Solo el paso Silenciar (sin HTTP ni texto) |
 
 Nunca una Rule hacia el mismo flujo (bucle). `/brain` y los destinos usan los mismos detectores:

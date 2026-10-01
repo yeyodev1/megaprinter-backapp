@@ -199,12 +199,45 @@ async function main() {
     assert.match(result.reply, /MP-/);
   });
 
-  await test("foto de un producto sin pedido: la IA la reconoce y busca en el catálogo", async () => {
-    const fake = fakeDeps({ receipt: { status: "no_order", image: { kind: "product", description: "una impresora Epson L3250", searchQuery: "impresora epson l3250" } } });
-    const result = (await conversation(fake, [{ media: "https://x/foto.jpg" }]))[0];
-    assert.equal(result.decision, "R1:foto_producto");
-    assert.match(result.reply, /Veo una impresora Epson L3250[\s\S]*Epson L3250 tinta continua/);
-    assert.equal(result.state.options[0].productId, "p3");
+  const image = (extra: Partial<Extract<ReceiptOutcome, { status: "image" }>>): ReceiptOutcome => ({
+    status: "image", kind: "product", description: "una impresora Epson L3250", searchQuery: "impresora epson l3250", productIds: [], exactMatch: false, ...extra,
+  });
+
+  await test("foto o captura de IG de un producto que SÍ tenemos", async () => {
+    const result = (await conversation(fakeDeps({ receipt: image({ productIds: ["p3"], exactMatch: true }) }), [{ media: "https://x/ig.jpg" }]))[0];
+    assert.equal(result.decision, "R1:foto_producto_exacto");
+    assert.match(result.reply, /¡Sí lo tenemos![\s\S]*Epson L3250/);
+    assert.equal(result.state.options.length, 1);
+  });
+
+  await test("foto de un modelo que no tenemos: muestra los parecidos", async () => {
+    const result = (await conversation(fakeDeps({ receipt: image({ description: "una laptop Dell XPS", productIds: ["p2", "p1"] }) }), [{ media: "https://x/f.jpg" }]))[0];
+    assert.equal(result.decision, "R1:foto_producto_parecido");
+    assert.match(result.reply, /no lo tengo en tienda/);
+    assert.equal(result.state.options[0].productId, "p2");
+  });
+
+  await test("foto de algo que no vendemos: ofrece cotizar con un asesor", async () => {
+    const result = (await conversation(fakeDeps({ receipt: image({ description: "un plotter HP DesignJet", searchQuery: "plotter designjet" }) }), [{ media: "https://x/f.jpg" }]))[0];
+    assert.equal(result.decision, "R1:foto_producto_sin_stock");
+    assert.match(result.reply, /asesor/);
+  });
+
+  await test("imagen que no es comprobante con transferencia pendiente: NO se guarda como pago", async () => {
+    const fake = fakeDeps({ receipt: image({ kind: "other", description: "un gato", pendingOrderNumber: "MP-00007" }) });
+    const result = (await conversation(fake, [{ media: "https://x/gato.jpg" }]))[0];
+    assert.equal(result.decision, "R1:imagen");
+    assert.notEqual(result.intent, "comprobante_recibido");
+    assert.match(result.reply, /MP-00007/);
+  });
+
+  await test("videos y audios: avisa que no se procesan", async () => {
+    const video = (await conversation(fakeDeps({ receipt: { status: "video" } }), [{ media: "https://x/v.mp4" }]))[0];
+    assert.match(video.reply, /no puedo ver videos[\s\S]*foto o captura/);
+    const audio = (await conversation(fakeDeps({ receipt: { status: "audio" } }), [{ media: "https://x/a.ogg" }]))[0];
+    assert.match(audio.reply, /escuchar audios/);
+    const noUrl = await handleTurn(createInitialState(), { message: "", mediaWithoutUrl: true, mediaEvent: "video" }, fakeDeps().deps);
+    assert.equal(noUrl.decision, "R0:video_sin_url");
   });
 
   await test("historial de BuilderBot como contexto para la IA", () => {
@@ -291,7 +324,8 @@ async function main() {
     assert.equal(decideRoute(null, { message: "quiero ver el catálogo" }, on).route, "catalog");
     assert.equal(decideRoute(null, { message: "quiero hablar con un asesor" }, on).route, "human");
     assert.equal(decideRoute(null, { message: "cuál es el estado de mi pedido" }, on).route, "searchOrder");
-    assert.equal(decideRoute(null, { message: "", mediaUrl: "https://x/y.jpg" }, on).route, "receipt");
+    assert.equal(decideRoute(null, { message: "", mediaUrl: "https://x/y.jpg" }, on).route, "media");
+    assert.equal(decideRoute(null, { message: "", mediaEvent: true }, on).route, "media");
     assert.equal(decideRoute(confirmCard, { message: "sí" }, on).route, "checkoutCard");
     assert.equal(decideRoute({ ...confirmCard, paymentMethod: "transfer" }, { message: "dale" }, on).route, "checkoutTransfer");
     assert.equal(decideRoute({ ...confirmCard, paymentMethod: "transfer" }, { message: "si" }, { bank: false, cardEnabled: true }).route, "checkoutAdvisor");

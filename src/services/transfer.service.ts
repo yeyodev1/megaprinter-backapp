@@ -106,6 +106,30 @@ export async function downloadReceipt(url: string): Promise<ReceiptFile> {
 
 export const isAcceptedReceipt = (mimeType: string) => RECEIPT_MIME.test(mimeType);
 
+const VIDEO_EXT = /\.(mp4|mov|3gp|webm|mkv|avi)(\?|$)/i;
+const AUDIO_EXT = /\.(ogg|opus|mp3|m4a|aac|wav|amr)(\?|$)/i;
+
+/**
+ * Tipo del archivo SIN descargarlo (un video puede pesar decenas de MB):
+ * primero la extension de la URL, luego un HEAD. "" si no se sabe.
+ */
+export async function probeMediaKind(url: string): Promise<"video" | "audio" | ""> {
+  if (VIDEO_EXT.test(url)) return "video";
+  if (AUDIO_EXT.test(url)) return "audio";
+  try {
+    const response = await axios.head(url, { timeout: 5000 });
+    const type = String(response.headers["content-type"] || "");
+    if (type.startsWith("video/")) return "video";
+    if (type.startsWith("audio/")) return "audio";
+  } catch {
+    /* algunos servidores no aceptan HEAD: se decide al descargar */
+  }
+  return "";
+}
+
+export const mediaKindFromMime = (mimeType: string): "video" | "audio" | "" =>
+  mimeType.startsWith("video/") ? "video" : mimeType.startsWith("audio/") ? "audio" : "";
+
 async function uploadReceipt(file: ReceiptFile, orderNumber: string): Promise<string> {
   const result = await new Promise<UploadApiResponse>((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
@@ -214,31 +238,46 @@ export interface ImageInsight {
   kind: "receipt" | "product" | "other";
   description: string;
   searchQuery: string;
+  /** Productos del catalogo que son ese mismo equipo (o el mas parecido). */
+  productIds: string[];
+  /** true si el primero de productIds es el mismo modelo que se ve en la imagen. */
+  exactMatch: boolean;
 }
 
-const IMAGE_PROMPT = `Eres el asistente de Megaprinter (tienda de tecnología en Ecuador: laptops, all in one, monitores, impresoras, cámaras de seguridad). Un cliente mandó esta imagen por WhatsApp.
-Devuelve SOLO JSON: {"kind":"receipt|product|other","description":"","searchQuery":""}
+const IMAGE_PROMPT = `Eres el asistente de Megaprinter (tienda de tecnología en Ecuador: laptops, all in one, monitores, impresoras, cámaras de seguridad). Un cliente mandó esta imagen por WhatsApp. Puede ser una foto, una captura de Instagram (de Megaprinter o de otra tienda), una publicidad o un comprobante bancario.
+Devuelve SOLO JSON: {"kind":"receipt|product|other","description":"","searchQuery":"","matches":[0],"exactMatch":false}
 - kind "receipt": comprobante de transferencia, depósito o pago bancario.
-- kind "product": foto o captura de un equipo de tecnología (laptop, impresora, monitor, cámara, etc.) o de su etiqueta/modelo.
+- kind "product": muestra un equipo de tecnología o una publicación/anuncio de uno (lee el texto de la imagen: marca, modelo, specs, precio).
 - kind "other": cualquier otra cosa.
-- description: una frase corta en español de lo que se ve (ej. "una impresora Epson L3250 negra").
-- searchQuery: si es product, marca + tipo + modelo para buscar en el catálogo (ej. "impresora epson l3250"); si no, "".`;
+- description: frase corta en español de lo que se ve (ej. "una impresora Epson L3250 negra", "una publicación de Instagram de una laptop HP 15").
+- searchQuery: si es product, marca + tipo + modelo (ej. "impresora epson l3250"); si no, "".
+- matches: si es product, hasta 3 números [ref] del CATÁLOGO que sean ese mismo equipo o los más parecidos (mismo tipo y gama), del más al menos parecido. [] si ninguno se parece. NUNCA inventes refs.
+- exactMatch: true solo si el primer ref es exactamente el mismo modelo de la imagen.`;
 
-/** Que es una imagen que llego sin pedido pendiente: comprobante, producto u otra cosa. */
-export async function describeImage(file: ReceiptFile): Promise<ImageInsight | null> {
+/** Que muestra una imagen: comprobante, producto (cruzado con el catalogo) u otra cosa. */
+export async function describeImage(
+  file: ReceiptFile,
+  catalog: Array<{ id: string; name: string; price: number; category: string }> = [],
+): Promise<ImageInsight | null> {
   if (!file.mimeType.startsWith("image/")) return null;
+  const list = catalog.map((product, index) => `[${index}] ${product.name} | ${product.category} | $${product.price.toFixed(2)}`).join("\n");
   const parsed = await geminiJson<any>({
-    system: IMAGE_PROMPT,
-    text: "Describe la imagen.",
+    system: `${IMAGE_PROMPT}\n\nCATÁLOGO:\n${list || "(vacío)"}`,
+    text: "Analiza la imagen del cliente.",
     image: { mimeType: file.mimeType, base64: file.buffer.toString("base64") },
-    maxOutputTokens: 200,
-    timeoutMs: 12000,
+    maxOutputTokens: 300,
+    timeoutMs: 15000,
   });
   if (!parsed) return null;
   const kind = ["receipt", "product", "other"].includes(parsed.kind) ? parsed.kind : "other";
+  const productIds = kind === "product" && Array.isArray(parsed.matches)
+    ? [...new Set(parsed.matches.map(Number).filter((index: number) => Number.isInteger(index) && catalog[index]).map((index: number) => catalog[index].id))].slice(0, 3) as string[]
+    : [];
   return {
     kind,
     description: String(parsed.description || "").slice(0, 160),
     searchQuery: kind === "product" ? String(parsed.searchQuery || "").slice(0, 120) : "",
+    productIds,
+    exactMatch: productIds.length > 0 && parsed.exactMatch === true,
   };
 }

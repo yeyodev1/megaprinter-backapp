@@ -90,8 +90,9 @@ export interface TurnInput {
   message: string;
   /** URL del archivo que mando el cliente (comprobante). */
   mediaUrl?: string;
-  /** Llego una imagen/audio pero BuilderBot no mando su URL. */
+  /** Llego un archivo pero BuilderBot no mando su URL (tipo segun el evento). */
   mediaWithoutUrl?: boolean;
+  mediaEvent?: "video" | "audio" | "file";
   history?: string;
 }
 
@@ -102,10 +103,21 @@ export interface CreatedOrder {
   paymentLink: string;
 }
 
+/** Resultado de un archivo que mando el cliente (lo analiza la IA antes de decidir). */
 export type ReceiptOutcome =
   | { status: "stored"; orderNumber: string; total: number; detectedAmount: number | null; amountMatches: boolean | null; isReceipt: boolean | null }
-  | { status: "no_order"; image?: { kind: "receipt" | "product" | "other"; description: string; searchQuery: string } }
-  | { status: "unsupported" | "error" };
+  | { status: "no_order" }
+  | {
+      status: "image";
+      kind: "product" | "other";
+      description: string;
+      searchQuery: string;
+      productIds: string[];
+      exactMatch: boolean;
+      /** Pedido por transferencia que sigue esperando comprobante (para recordarlo). */
+      pendingOrderNumber?: string;
+    }
+  | { status: "video" | "audio" | "unsupported" | "error" };
 
 export interface OrderSummary {
   id: string;
@@ -143,6 +155,10 @@ const QUESTIONS: Record<Exclude<Stage, "idle" | "choosing" | "confirm" | "ordere
 const ASK_PRODUCT = "¿Qué estás buscando? 💻🖨️ Escríbeme algo como \"laptop i7 16GB\", \"impresora de tinta continua\" o pídeme el *catálogo*";
 
 export const FALLBACK_MESSAGE = ASK_PRODUCT;
+
+const VIDEO_REPLY =
+  "Por aquí no puedo ver videos 🙏 Mándame una *foto o captura* de lo que buscas (también sirve una captura de nuestro Instagram) y te digo si lo tenemos.";
+const AUDIO_REPLY = "Todavía no puedo escuchar audios 🙏 Escríbeme lo que necesitas o mándame una *foto* de lo que buscas.";
 
 const paymentLabel = (method: BotState["paymentMethod"]) =>
   method === "card" ? "Tarjeta (link de Payphone)" : method === "transfer" ? "Transferencia bancaria" : "Por definir";
@@ -329,20 +345,38 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
         { intent: "comprobante_recibido", route: "receiptReceived", orderNumber: outcome.orderNumber, paymentMethod: "transfer", total: outcome.total },
       );
     }
-    if (outcome.status === "no_order" && outcome.image?.kind === "product") {
+    if (outcome.status === "image" && outcome.kind === "product") {
       const catalog = await deps.loadCatalog();
-      const found = searchProducts(catalog, outcome.image.searchQuery || outcome.image.description);
+      const byId = new Map(catalog.map((product) => [product.id, product]));
+      const matched = outcome.productIds.map((id) => byId.get(id)).filter((product): product is BotProduct => Boolean(product));
+      const found = matched.length ? matched : searchProducts(catalog, outcome.searchQuery || outcome.description, 3);
+      if (found.length && outcome.exactMatch) {
+        return showOptions(state, found.slice(0, 1), "R1:foto_producto_exacto", `¡Sí lo tenemos! 🙌 Veo ${outcome.description}:`);
+      }
       if (found.length) {
-        return showOptions(state, found, "R1:foto_producto", `Veo ${outcome.image.description} 👀 Esto es lo más parecido que tenemos:`);
+        return showOptions(state, found, "R1:foto_producto_parecido", `Veo ${outcome.description} 👀 Ese modelo exacto no lo tengo en tienda, pero estos son los más parecidos:`);
       }
       return reply(
         state,
-        `Veo ${outcome.image.description} 👀 No lo encuentro en el catálogo ahora mismo. Escribe *asesor* y una persona te confirma si lo conseguimos, o dime qué buscas y te muestro opciones.`,
-        "R1:foto_producto_sin_resultados",
+        `Veo ${outcome.description} 👀 Ese equipo no lo tenemos en tienda ahora mismo, pero podemos revisar si lo conseguimos. Escribe *asesor* y te cotizan, o dime qué necesitas y te muestro opciones.`,
+        "R1:foto_producto_sin_stock",
       );
     }
-    if (outcome.status === "no_order" && outcome.image?.kind === "other") {
-      return reply(state, `Recibí tu imagen (${outcome.image.description}) 📎 ¿En qué te ayudo? Puedo mostrarte productos o el estado de tu pedido.`, "R1:imagen");
+    if (outcome.status === "image") {
+      const pending = outcome.pendingOrderNumber
+        ? `\n\nSi querías enviar el comprobante del pedido *${outcome.pendingOrderNumber}*, mándame la foto del comprobante de la transferencia.`
+        : "";
+      return reply(
+        state,
+        `Recibí tu imagen (${outcome.description}) 📎 Si buscas un producto, mándame una foto o captura de él (puede ser de nuestro Instagram) y te digo si lo tenemos.${pending}`,
+        "R1:imagen",
+      );
+    }
+    if (outcome.status === "video") {
+      return reply(state, VIDEO_REPLY, "R1:video");
+    }
+    if (outcome.status === "audio") {
+      return reply(state, AUDIO_REPLY, "R1:audio");
     }
     if (outcome.status === "no_order") {
       return reply(
@@ -352,19 +386,15 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
       );
     }
     if (outcome.status === "unsupported") {
-      return reply(state, "Solo puedo recibir el comprobante como *foto* o *PDF* 🙏 ¿Me lo reenvías?", "R1:archivo_no_soportado");
+      return reply(state, "Ese tipo de archivo no lo puedo abrir 🙏 Mándame una *foto* o *PDF* (comprobante o lo que buscas).", "R1:archivo_no_soportado");
     }
-    return reply(state, "No pude guardar tu comprobante ahorita 😕 ¿Me lo reenvías en un momento?", "R1:comprobante_error");
+    return reply(state, "No pude abrir tu archivo ahorita 😕 ¿Me lo reenvías en un momento?", "R1:archivo_error");
   }
 
   if (input.mediaWithoutUrl && !message) {
-    return reply(
-      state,
-      state.stage === "ordered" && state.paymentMethod === "transfer"
-        ? "No logré abrir tu archivo 😕 ¿Me reenvías la foto del comprobante?"
-        : "Por aquí solo puedo leer texto y comprobantes de pago 🙏 Cuéntame qué buscas",
-      "R0:media_sin_url",
-    );
+    if (input.mediaEvent === "video") return reply(state, VIDEO_REPLY, "R0:video_sin_url");
+    if (input.mediaEvent === "audio") return reply(state, AUDIO_REPLY, "R0:audio_sin_url");
+    return reply(state, "No logré abrir tu archivo 😕 ¿Me lo reenvías como *foto*?", "R0:media_sin_url");
   }
 
   // R0: mensaje vacio.
@@ -599,7 +629,7 @@ export const DECISIONS = [
   "checkoutTransfer",
   "checkoutAdvisor",
   "searchOrder",
-  "receipt",
+  "media",
   "human",
 ] as const;
 export type Decision = (typeof DECISIONS)[number];
@@ -612,13 +642,13 @@ export type Decision = (typeof DECISIONS)[number];
  */
 export function decideRoute(
   previous: Partial<BotState> | null,
-  input: { message: string; mediaUrl?: string },
+  input: { message: string; mediaUrl?: string; mediaEvent?: boolean },
   options: { bank: boolean; cardEnabled: boolean },
 ): { route: Decision; reason: string } {
   const state = { ...createInitialState(), ...(previous || {}) };
   const message = input.message.trim();
 
-  if (input.mediaUrl) return { route: "receipt", reason: "archivo adjunto" };
+  if (input.mediaUrl || (input.mediaEvent && !message)) return { route: "media", reason: "archivo adjunto" };
   if (!message) return { route: "conversation", reason: "mensaje vacio" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
   if (wantsTracking(message) || orderNumberIn(message)) return { route: "searchOrder", reason: "consulta de pedido" };

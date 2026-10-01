@@ -6,6 +6,7 @@ import { WhatsAppSessionModel } from "../models/whatsappSession.model";
 import { notifyNewOrder } from "../services/email.service";
 import { geminiEnabled } from "../services/gemini.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
+import { naturalize } from "../services/whatsappBot/voice";
 import {
   activeBankAccounts,
   attachReceipt,
@@ -453,6 +454,13 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
       },
       await buildDeps(phone),
     );
+
+    // Voz de Mila con IA: el mismo contenido, dicho distinto cada vez (sin repetir
+    // sus ultimos mensajes). Con BOT_AI_VOICE=off se envia la plantilla tal cual.
+    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off") {
+      const lastBotMessages = history.filter((entry: any) => entry.role === "assistant").slice(-3).map((entry: any) => String(entry.content));
+      result.reply = await naturalize(result.reply, lastBotMessages);
+    }
 
     const userEntry = message || (mediaUrl ? "[archivo adjunto]" : "");
     if (userEntry) history.push({ role: "user", content: userEntry.slice(0, 2000), ...(mediaUrl ? { mediaUrl } : {}), createdAt: new Date() });

@@ -12,6 +12,13 @@ amigable y dispuesta a ayudar ("pídeme lo que necesites"), cercana, nada formal
 final** ("Cómo prefieres pagar?"), nunca "¿" ni "¡": un filtro final los quita de todo lo que sale,
 incluidas las respuestas de Gemini.
 
+### Voz con IA (sin repetir mensajes)
+
+El router decide QUÉ decir; luego Gemini reescribe el mensaje con la voz de Mila, distinto a sus
+últimos 3 mensajes. Los datos no se tocan: las líneas de listas, viñetas, cuenta bancaria y resumen
+deben salir idénticas, y en el texto libre se conservan MP-, montos, números, links y correos. Si la
+IA cambia un dato, tarda más de 8 s o falla, se envía el texto original. `BOT_AI_VOICE=off` la apaga.
+
 ## Políticas de Meta (WhatsApp Business) y cómo se cumplen
 
 | Regla de Meta | Cómo la cumple el bot |

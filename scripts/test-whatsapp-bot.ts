@@ -8,6 +8,7 @@ import assert from "assert/strict";
 import { BotProduct } from "../src/services/whatsappBot/catalog";
 import { aiExtract, cleanAnswer, heuristicExtract, answerPricesAreReal } from "../src/services/whatsappBot/extractor";
 import * as gemini from "../src/services/gemini.service";
+import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
 import { BotDeps, BotState, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
@@ -410,6 +411,34 @@ async function main() {
       const turn = await handleTurn(state, { message: "si" }, fake.deps);
       assert.equal(turn.route, expected);
     }
+  });
+
+  await test("voz con IA: varía el texto pero conserva los datos exactos", async () => {
+    const draft = "Listo, tu pedido *MP-00012* ya está registrado 🎉\n\nTransfiere *$190.00* a esta cuenta 👇\n🏦 *Produbanco*\nN.º *12040641835*\n\nMándame la foto del comprobante 📸";
+    const original = gemini.geminiJson;
+    try {
+      const good = "Ya quedó tu pedido *MP-00012* 🥳\n\nTransfiere *$190.00* a esta cuenta 👇\n🏦 *Produbanco*\nN.º *12040641835*\n\nCuando transfieras, pásame la foto del comprobante 📸💙";
+      (gemini as any).geminiJson = async () => ({ message: good });
+      assert.equal(await naturalize(draft, []), good);
+      // Cambia el número de pedido en el texto libre: se descarta.
+      (gemini as any).geminiJson = async () => ({ message: good.replace("MP-00012", "MP-00013") });
+      assert.equal(await naturalize(draft, []), draft);
+      // Cambia un número de cuenta: se descarta y sale el borrador.
+      (gemini as any).geminiJson = async () => ({ message: good.replace("12040641835", "12040641836") });
+      assert.equal(await naturalize(draft, []), draft);
+      // Inventa un texto larguísimo: se descarta.
+      (gemini as any).geminiJson = async () => ({ message: `${good}\n${"bla ".repeat(400)}` });
+      assert.equal(await naturalize(draft, []), draft);
+      // Mete signos de apertura: se limpian.
+      (gemini as any).geminiJson = async () => ({ message: `¡Ya quedó! ${good}` });
+      assert.doesNotMatch(await naturalize(draft, []), /[¿¡]/);
+      // IA caída: borrador.
+      (gemini as any).geminiJson = async () => null;
+      assert.equal(await naturalize(draft, []), draft);
+    } finally {
+      (gemini as any).geminiJson = original;
+    }
+    assert.equal(keepsData("Y tu correo? 📧", "Me pasas tu correo? 😊"), true, "sin datos, puede cambiar todo");
   });
 
   await test("formato de la IA: viñetas con * no rompen las negritas", () => {

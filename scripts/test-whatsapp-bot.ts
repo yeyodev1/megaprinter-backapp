@@ -441,7 +441,7 @@ async function main() {
     assert.equal(keepsData("Y tu correo? 📧", "Me pasas tu correo? 😊"), true, "sin datos, puede cambiar todo");
     assert.equal(keepsData("Escríbeme *retiro* si lo recoges", "Si lo recoges, escribe retiro"), false, "conserva las palabras en negrita");
     assert.equal(keepsData("Soy *Mila* 🤖, tu agente de *Megaprinter* ✨", "Hola! Soy *Mila* de *Megaprinter* 😊"), false, "mantiene la presentación de agente");
-    assert.equal(keepsData("Soy *Mila* 🤖, tu agente de *Megaprinter* ✨", "Holi! Soy *Mila* 🤖, tu agente en *Megaprinter* 💙"), true);
+    assert.equal(keepsData("Soy *Mila* 🤖, tu agente de *Megaprinter* ✨ Pídeme lo que necesites, te ayudo siempre", "Holi! Soy *Mila* 🤖, tu agente en *Megaprinter* 💙 Pídeme lo que necesites, siempre te ayudo"), true);
   });
 
   await test("formato de la IA: viñetas con * no rompen las negritas", () => {

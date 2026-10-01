@@ -29,7 +29,10 @@ export const protectedTokens = (text: string) =>
  * presentacion como agente (transparencia que pide Meta).
  */
 export const protectedPhrases = (text: string) => [
-  ...new Set([...(text.match(/\*[^*\n]+\*/g) || []), ...(text.includes("tu agente de") ? ["agente"] : [])]),
+  ...new Set([
+    ...(text.match(/\*[^*\n]+\*/g) || []),
+    ...(text.includes("tu agente de") ? ["agente", "lo que necesites", "siempre"] : []),
+  ]),
 ];
 
 /** El borrador y la version de la IA conservan exactamente los mismos datos. */
@@ -50,7 +53,7 @@ Reglas estrictas:
 - En el resto del texto conserva exactos los números de pedido (MP-…), montos ($…), números, links y correos.
 - No agregues información, productos, precios, plazos ni promesas que no estén en el borrador. No quites nada que el borrador pida al cliente: la pregunta o instrucción final debe seguir pidiendo lo mismo.
 - Copia exactas todas las palabras en *negrita* (con sus asteriscos): son lo que el cliente debe escribir o leer (*sí*, *retiro*, *catálogo*, productos, *Mila*, *Megaprinter*).
-- Si el borrador te presenta como "tu agente de Megaprinter", mantén esa presentación con 🤖.
+- Si el borrador te presenta como "tu agente de Megaprinter", mantén esa presentación con 🤖 y que puede pedirte "lo que necesites" porque lo ayudas "siempre".
 - Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡").
 - Igual de corto o más corto que el borrador. Nada de relleno.`;
 

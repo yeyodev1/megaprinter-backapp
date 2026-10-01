@@ -6,7 +6,7 @@
  */
 import assert from "assert/strict";
 import { BotProduct } from "../src/services/whatsappBot/catalog";
-import { aiExtract, heuristicExtract, answerPricesAreReal } from "../src/services/whatsappBot/extractor";
+import { aiExtract, cleanAnswer, heuristicExtract, answerPricesAreReal } from "../src/services/whatsappBot/extractor";
 import * as gemini from "../src/services/gemini.service";
 import { BotDeps, BotState, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, handleTurn } from "../src/services/whatsappBot/router";
 import { latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
@@ -267,6 +267,13 @@ async function main() {
     assert.equal(result.decision, "R8:pregunta_con_opciones");
     assert.match(result.reply, /Para diseño[\s\S]*\*1\.\* Laptop Dell/);
     assert.equal(result.state.options[0].productId, "p2");
+  });
+
+  await test("formato de la IA: viñetas con * no rompen las negritas", () => {
+    assert.equal(cleanAnswer("*La *Lenovo* por *$870.00*."), "• La *Lenovo* por *$870.00*.");
+    assert.equal(cleanAnswer("* Opción *HP*"), "• Opción *HP*");
+    assert.equal(cleanAnswer("Te conviene *16 GB* de RAM."), "Te conviene *16 GB* de RAM.");
+    assert.equal(cleanAnswer("precio *raro"), "precio raro");
   });
 
   await test("respuesta de IA con precio inventado se descarta", () => {

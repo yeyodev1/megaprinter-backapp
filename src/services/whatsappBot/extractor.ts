@@ -96,7 +96,7 @@ Campos:
 - customerName: solo si escribe su nombre (o responde a "¿a nombre de quién?"). customerEmail: solo si escribe un correo.
 - address: dirección de entrega con ciudad, o "Retiro en tienda" si quiere retirar.
 - paymentMethod: "card" (tarjeta, link de pago, Payphone) o "transfer" (transferencia, depósito). null si no lo dice.
-- answer: SOLO con intent "pregunta". Máximo 4 líneas, español de Ecuador, cálido y concreto, formato WhatsApp (*negrita*). Basado EXCLUSIVAMENTE en el catálogo. Precios exactos del catálogo en formato $1234.56. Si el dato no está en el catálogo, dilo y ofrece pasar con un asesor. No pidas datos personales en answer.
+- answer: SOLO con intent "pregunta". Máximo 2 frases (un párrafo, sin listas ni viñetas), español de Ecuador, cálido y concreto. Puedes usar *negrita* de WhatsApp (asterisco al inicio y al final de la palabra). Basado EXCLUSIVAMENTE en el catálogo. Si devuelves suggestions, NO enumeres esos productos en answer: el sistema los muestra numerados debajo; solo explica el criterio (ej. "Para diseño te conviene un Core i7 o Ryzen 7 con 16 GB de RAM; estas son las mejores opciones:"). Si mencionas un precio, exacto del catálogo en formato $1234.56. Si el dato no está en el catálogo, dilo y ofrece pasar con un asesor. No pidas datos personales en answer.
 - Usa la pregunta anterior del bot y el historial para interpretar respuestas cortas ("la segunda", "esa", "sí").
 - Todo lo que no aplique va null, "" o [].`;
 
@@ -107,6 +107,24 @@ const catalogForPrompt = (catalog: BotProduct[]) =>
         `[${index}] ${product.name} | ${product.category} | ${money(product.price)}${product.originalPrice ? ` (antes ${money(product.originalPrice)})` : ""} | ${product.specs.slice(0, 220)}`,
     )
     .join("\n");
+
+/**
+ * Limpia el formato de la IA para WhatsApp: un "*" usado como viñeta rompe las
+ * negritas ("*La *Lenovo…"). Las viñetas pasan a "•" y se quitan asteriscos sueltos.
+ */
+export function cleanAnswer(answer: string) {
+  return answer
+    .split("\n")
+    .map((line) => {
+      let text = line.replace(/^\s*[*-]\s+/, "• ");
+      if ((text.match(/\*/g) || []).length % 2 === 1) text = text.replace(/^(\s*)\*/, "$1• ").replace(/^• •/, "•");
+      if ((text.match(/\*/g) || []).length % 2 === 1) text = text.replace(/\*/g, "");
+      return text;
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 /** Todo precio que la IA escriba debe existir en el catalogo; si no, se descarta su respuesta. */
 export function answerPricesAreReal(answer: string, catalog: BotProduct[]) {
@@ -157,7 +175,7 @@ export const aiExtract: Extractor = async (message, context) => {
     customerEmail: extractEmail(String(parsed.customerEmail || "")) || fallback.customerEmail,
     address: str(parsed.address)?.slice(0, 300),
     paymentMethod: parsed.paymentMethod === "card" || parsed.paymentMethod === "transfer" ? parsed.paymentMethod : fallback.paymentMethod,
-    answer: intent === "pregunta" && answer && answerPricesAreReal(answer, context.catalog) ? answer.slice(0, 900) : undefined,
+    answer: intent === "pregunta" && answer && answerPricesAreReal(answer, context.catalog) ? cleanAnswer(answer).slice(0, 700) : undefined,
     source: "ai",
   };
 };

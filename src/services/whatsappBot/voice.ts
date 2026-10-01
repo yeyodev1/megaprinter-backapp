@@ -23,10 +23,23 @@ export const protectedLines = (text: string) =>
 export const protectedTokens = (text: string) =>
   [...new Set(text.match(/MP-\d+|\$\d[\d,]*(?:\.\d+)?|https?:\/\/\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\d{4,}/g) || [])];
 
+/**
+ * Lo que el cliente debe leer o escribir tal cual: todo lo que va en *negrita*
+ * (*sí*, *retiro*, *catálogo*, productos, *Mila*, *Megaprinter*) y la
+ * presentacion como agente (transparencia que pide Meta).
+ */
+export const protectedPhrases = (text: string) => [
+  ...new Set([...(text.match(/\*[^*\n]+\*/g) || []), ...(text.includes("tu agente de") ? ["agente"] : [])]),
+];
+
 /** El borrador y la version de la IA conservan exactamente los mismos datos. */
 export function keepsData(draft: string, rewritten: string) {
   const output = rewritten.split("\n").map((line) => line.trim());
-  return protectedLines(draft).every((line) => output.includes(line)) && protectedTokens(draft).every((token) => rewritten.includes(token));
+  return (
+    protectedLines(draft).every((line) => output.includes(line)) &&
+    protectedTokens(draft).every((token) => rewritten.includes(token)) &&
+    protectedPhrases(draft).every((phrase) => rewritten.includes(phrase))
+  );
 }
 
 const VOICE_PROMPT = (name: string) => `Eres ${name}, la agente de Megaprinter (tienda de tecnología en Ecuador) que atiende por WhatsApp. Mujer, súper amigable y cercana, tuteas, siempre con ganas de ayudar, nada formal, español de Ecuador, emojis.
@@ -36,8 +49,10 @@ Reglas estrictas:
 - Copia IDÉNTICAS, cada una en su propia línea, las líneas de listas numeradas (*1.* …), viñetas (•), datos de cuenta (🏦, Cuenta, N.º, A nombre de, RUC), resumen (👤 📧 📍 💳), links y texto en cursiva (_…_).
 - En el resto del texto conserva exactos los números de pedido (MP-…), montos ($…), números, links y correos.
 - No agregues información, productos, precios, plazos ni promesas que no estén en el borrador. No quites nada que el borrador pida al cliente: la pregunta o instrucción final debe seguir pidiendo lo mismo.
-- Mantén las *negritas* de WhatsApp. Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡").
-- Largo parecido al borrador; si el borrador es corto, el tuyo también.`;
+- Copia exactas todas las palabras en *negrita* (con sus asteriscos): son lo que el cliente debe escribir o leer (*sí*, *retiro*, *catálogo*, productos, *Mila*, *Megaprinter*).
+- Si el borrador te presenta como "tu agente de Megaprinter", mantén esa presentación con 🤖.
+- Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡").
+- Igual de corto o más corto que el borrador. Nada de relleno.`;
 
 export async function naturalize(draft: string, recent: string[]): Promise<string> {
   if (!draft.trim()) return draft;
@@ -48,6 +63,6 @@ export async function naturalize(draft: string, recent: string[]): Promise<strin
     timeoutMs: 8000,
   });
   const message = typeof parsed?.message === "string" ? casualMarks(parsed.message.trim()) : "";
-  if (!message || message.length > draft.length * 1.8 + 200 || !keepsData(draft, message)) return draft;
+  if (!message || message.length > draft.length * 1.3 + 60 || !keepsData(draft, message)) return draft;
   return message;
 }

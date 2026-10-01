@@ -48,7 +48,8 @@ Todas responden **HTTP 200** siempre (un 4xx/5xx deja al cliente sin respuesta).
 |---|---|---|
 | `rawMessage` | `{body}` | Texto del cliente. También acepta `body`, `message` o `history={history}`. |
 | `phone` | `{from}` | Teléfono; también `from`. Acepta JID `…@s.whatsapp.net`. |
-| `urlTempFile` | variable del archivo del evento de imagen/documento | También `fileUrl`, `mediaUrl`, `imageUrl`, `url`. **Verificar el nombre exacto en el panel de BuilderBot.** |
+| `urlTempFile` | `{urlTempFile}` | Foto o PDF. La IA la analiza siempre: comprobante → al pedido; foto de producto → busca en el catálogo. |
+| `history` | `{history}` | Opcional, recomendado. Contexto para la IA (incluye lo que escribió un asesor a mano). El backend además guarda su propio historial por teléfono (30 mensajes, 3 días). |
 
 ### Respuesta
 

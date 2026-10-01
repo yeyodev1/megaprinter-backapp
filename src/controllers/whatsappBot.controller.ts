@@ -5,7 +5,7 @@ import { ProductModel } from "../models/product.model";
 import { WhatsAppSessionModel } from "../models/whatsappSession.model";
 import { notifyNewOrder } from "../services/email.service";
 import { geminiEnabled } from "../services/gemini.service";
-import { attachReceipt, bankDetails, downloadReceipt, isAcceptedReceipt } from "../services/transfer.service";
+import { attachReceipt, bankDetails, describeImage, downloadReceipt, isAcceptedReceipt } from "../services/transfer.service";
 import { BotProduct, catalogOverview } from "../services/whatsappBot/catalog";
 import { aiExtract, heuristicExtract } from "../services/whatsappBot/extractor";
 import {
@@ -135,6 +135,34 @@ export function latestUserMessage(history: unknown): string {
   return "";
 }
 
+/** Ultimos turnos del {history} de BuilderBot como texto "Cliente: … / Bot: …" (vacio si no llega). */
+export function builderBotHistory(value: unknown, maxEntries = 12): string {
+  let data: any = value;
+  if (typeof data === "string") {
+    const text = clean(data);
+    if (!text) return "";
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return text.split(/\r?\n/).filter((line) => line.trim()).slice(-maxEntries).join("\n").slice(-3000);
+    }
+  }
+  const items = Array.isArray(data)
+    ? data
+    : (["messages", "history", "conversation", "data"].map((key) => data?.[key]).find(Array.isArray) as any[]) || [];
+  return items
+    .slice(-maxEntries)
+    .map((item: any) => {
+      const content = historyContent(item?.content ?? item?.parts ?? item?.text ?? item?.body ?? item);
+      if (!content) return "";
+      const assistant = ASSISTANT_ROLES.test(String(item?.role ?? item?.sender ?? item?.type ?? "user"));
+      return `${assistant ? "Bot" : "Cliente"}: ${content.slice(0, 400)}`;
+    })
+    .filter(Boolean)
+    .join("\n")
+    .slice(-3000);
+}
+
 function rawText(body: any) {
   return [body?.rawMessage, body?.rawMess, body?.body, body?.message, body?.mensaje].map(clean).find(Boolean) || latestUserMessage(body?.history);
 }
@@ -228,10 +256,12 @@ async function transferOrderFor(phone: string, orderId: string) {
 
 async function receiveReceipt(phone: string, orderId: string, mediaUrl: string): Promise<ReceiptOutcome> {
   try {
-    const order = await transferOrderFor(phone, orderId);
-    if (!order) return { status: "no_order" };
     const file = await downloadReceipt(mediaUrl);
     if (!isAcceptedReceipt(file.mimeType)) return { status: "unsupported" };
+    const order = await transferOrderFor(phone, orderId);
+    // Sin pedido por transferencia pendiente, la IA mira que es: un comprobante
+    // suelto, la foto de un producto ("¿tienen esta?") u otra cosa.
+    if (!order) return { status: "no_order", image: (await describeImage(file)) || undefined };
     const { analysis } = await attachReceipt(order, file, "whatsapp");
     return {
       status: "stored",
@@ -351,10 +381,14 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
 
     const previous = { ...createInitialState(), ...(session.state || {}) } as BotState;
     const history = [...(session.history || [])];
-    const recent = history
-      .slice(-8)
-      .map((entry: any) => `${entry.role === "user" ? "Cliente" : "Bot"}: ${String(entry.content).slice(0, 400)}`)
-      .join("\n");
+    // Contexto para la IA: el {history} de BuilderBot si llega (incluye lo que
+    // escribio un asesor a mano); si no, el historial guardado por telefono.
+    const recent =
+      builderBotHistory(body?.history) ||
+      history
+        .slice(-8)
+        .map((entry: any) => `${entry.role === "user" ? "Cliente" : "Bot"}: ${String(entry.content).slice(0, 400)}`)
+        .join("\n");
 
     const result = await handleTurn(
       previous,

@@ -104,7 +104,8 @@ export interface CreatedOrder {
 
 export type ReceiptOutcome =
   | { status: "stored"; orderNumber: string; total: number; detectedAmount: number | null; amountMatches: boolean | null; isReceipt: boolean | null }
-  | { status: "no_order" | "unsupported" | "error" };
+  | { status: "no_order"; image?: { kind: "receipt" | "product" | "other"; description: string; searchQuery: string } }
+  | { status: "unsupported" | "error" };
 
 export interface OrderSummary {
   id: string;
@@ -327,6 +328,21 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
         "R1:comprobante",
         { intent: "comprobante_recibido", route: "receiptReceived", orderNumber: outcome.orderNumber, paymentMethod: "transfer", total: outcome.total },
       );
+    }
+    if (outcome.status === "no_order" && outcome.image?.kind === "product") {
+      const catalog = await deps.loadCatalog();
+      const found = searchProducts(catalog, outcome.image.searchQuery || outcome.image.description);
+      if (found.length) {
+        return showOptions(state, found, "R1:foto_producto", `Veo ${outcome.image.description} 👀 Esto es lo más parecido que tenemos:`);
+      }
+      return reply(
+        state,
+        `Veo ${outcome.image.description} 👀 No lo encuentro en el catálogo ahora mismo. Escribe *asesor* y una persona te confirma si lo conseguimos, o dime qué buscas y te muestro opciones.`,
+        "R1:foto_producto_sin_resultados",
+      );
+    }
+    if (outcome.status === "no_order" && outcome.image?.kind === "other") {
+      return reply(state, `Recibí tu imagen (${outcome.image.description}) 📎 ¿En qué te ayudo? Puedo mostrarte productos o el estado de tu pedido.`, "R1:imagen");
     }
     if (outcome.status === "no_order") {
       return reply(

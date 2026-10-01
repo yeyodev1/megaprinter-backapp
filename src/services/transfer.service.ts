@@ -209,3 +209,36 @@ export async function attachReceipt(order: any, file: ReceiptFile, via: "whatsap
 
   return { url, analysis };
 }
+
+export interface ImageInsight {
+  kind: "receipt" | "product" | "other";
+  description: string;
+  searchQuery: string;
+}
+
+const IMAGE_PROMPT = `Eres el asistente de Megaprinter (tienda de tecnología en Ecuador: laptops, all in one, monitores, impresoras, cámaras de seguridad). Un cliente mandó esta imagen por WhatsApp.
+Devuelve SOLO JSON: {"kind":"receipt|product|other","description":"","searchQuery":""}
+- kind "receipt": comprobante de transferencia, depósito o pago bancario.
+- kind "product": foto o captura de un equipo de tecnología (laptop, impresora, monitor, cámara, etc.) o de su etiqueta/modelo.
+- kind "other": cualquier otra cosa.
+- description: una frase corta en español de lo que se ve (ej. "una impresora Epson L3250 negra").
+- searchQuery: si es product, marca + tipo + modelo para buscar en el catálogo (ej. "impresora epson l3250"); si no, "".`;
+
+/** Que es una imagen que llego sin pedido pendiente: comprobante, producto u otra cosa. */
+export async function describeImage(file: ReceiptFile): Promise<ImageInsight | null> {
+  if (!file.mimeType.startsWith("image/")) return null;
+  const parsed = await geminiJson<any>({
+    system: IMAGE_PROMPT,
+    text: "Describe la imagen.",
+    image: { mimeType: file.mimeType, base64: file.buffer.toString("base64") },
+    maxOutputTokens: 200,
+    timeoutMs: 12000,
+  });
+  if (!parsed) return null;
+  const kind = ["receipt", "product", "other"].includes(parsed.kind) ? parsed.kind : "other";
+  return {
+    kind,
+    description: String(parsed.description || "").slice(0, 160),
+    searchQuery: kind === "product" ? String(parsed.searchQuery || "").slice(0, 120) : "",
+  };
+}

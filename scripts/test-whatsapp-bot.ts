@@ -9,7 +9,7 @@ import { BotProduct } from "../src/services/whatsappBot/catalog";
 import { aiExtract, cleanAnswer, heuristicExtract, answerPricesAreReal } from "../src/services/whatsappBot/extractor";
 import * as gemini from "../src/services/gemini.service";
 import { BotDeps, BotState, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
-import { latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
+import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod } from "../src/services/whatsappBot/intents";
 
 const CATALOG: BotProduct[] = [
@@ -197,6 +197,21 @@ async function main() {
     const result = (await conversation(fakeDeps({ receipt: { status: "no_order" } }), [{ media: "https://x/y.jpg" }]))[0];
     assert.equal(result.decision, "R1:comprobante_sin_pedido");
     assert.match(result.reply, /MP-/);
+  });
+
+  await test("foto de un producto sin pedido: la IA la reconoce y busca en el catálogo", async () => {
+    const fake = fakeDeps({ receipt: { status: "no_order", image: { kind: "product", description: "una impresora Epson L3250", searchQuery: "impresora epson l3250" } } });
+    const result = (await conversation(fake, [{ media: "https://x/foto.jpg" }]))[0];
+    assert.equal(result.decision, "R1:foto_producto");
+    assert.match(result.reply, /Veo una impresora Epson L3250[\s\S]*Epson L3250 tinta continua/);
+    assert.equal(result.state.options[0].productId, "p3");
+  });
+
+  await test("historial de BuilderBot como contexto para la IA", () => {
+    const text = builderBotHistory('[{"role":"user","content":"hola"},{"role":"assistant","content":"¿qué buscas?"},{"role":"user","content":"laptop"}]');
+    assert.equal(text, "Cliente: hola\nBot: ¿qué buscas?\nCliente: laptop");
+    assert.equal(builderBotHistory("{history}"), "");
+    assert.equal(builderBotHistory(undefined), "");
   });
 
   await test("monto distinto en el comprobante se avisa al cliente", async () => {

@@ -29,7 +29,8 @@ export const isGreeting = (text: string) =>
 
 export function detectPaymentMethod(text: string): "card" | "transfer" | null {
   const value = normalize(text);
-  if (/\b(transferencia|transfiero|transferir|deposito|depositar|banco|pichincha|produbanco|bolivariano|pacifico|deuna)\b/.test(value)) return "transfer";
+  // Sin nombres de bancos: "Quito, Pichincha" es una direccion. El banco lo reconoce detectBank.
+  if (/\b(transferencia|transfiero|transferir|deposito|depositar|banco|deuna)\b/.test(value)) return "transfer";
   if (/\b(tarjeta|credito|debito|link|enlace|payphone|visa|mastercard|diferido)\b/.test(value)) return "card";
   return null;
 }
@@ -58,3 +59,7 @@ export function extractQuantity(text: string): number | null {
 }
 
 export const orderNumberIn = (text: string) => text.match(/\bMP-?\s?(\d{1,6})\b/i)?.[1] || "";
+
+/** Pide que no le escriban mas (politica de Meta: se respeta y se confirma). */
+export const wantsOptOut = (text: string) =>
+  has(text, /\b(no me escribas|no me vuelvas a escribir|deja de escribir(me)?|no quiero (mas )?mensajes|stop|darme de baja|no molestar|no gracias)\b/);

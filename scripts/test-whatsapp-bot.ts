@@ -10,7 +10,7 @@ import { aiExtract, cleanAnswer, heuristicExtract, answerPricesAreReal } from ".
 import * as gemini from "../src/services/gemini.service";
 import { BotDeps, BotState, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
-import { extractChoice, extractQuantity, detectPaymentMethod } from "../src/services/whatsappBot/intents";
+import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 
 const CATALOG: BotProduct[] = [
   { id: "p1", name: "Laptop HP 15 Core i5 16GB RAM 512GB SSD", price: 649, originalPrice: 749, category: "Laptops", kind: "product", description: "Laptop para trabajo y estudio", specs: "Procesador: Intel Core i5; RAM: 16GB; Almacenamiento: 512GB SSD" },
@@ -19,7 +19,16 @@ const CATALOG: BotProduct[] = [
   { id: "p4", name: "Monitor AOC 24 pulgadas Full HD", price: 139, originalPrice: null, category: "Monitores", kind: "product", description: "Monitor IPS", specs: "Tamaño: 24 pulgadas; Resolución: 1920x1080" },
 ];
 
-const BANK = { bank: "Banco Pichincha", accountType: "corriente", accountNumber: "2100123456", accountHolder: "Megaprinter S.A.", holderId: "0999999999001" };
+const account = (id: string, bankCode: string, bank: string, accountType: string, accountNumber: string) => ({
+  id, bankCode, bank, accountType, accountNumber, accountHolder: "Selena Mendoza Marcillo", holderId: "1314709419", logoUrl: "",
+});
+const BANK = { ...account("b0", "pichincha", "Banco Pichincha", "corriente", "2100123456"), accountHolder: "Megaprinter S.A.", holderId: "0999999999001" };
+const FOUR_BANKS = [
+  account("b1", "guayaquil", "Banco Guayaquil", "de ahorros", "4386056"),
+  account("b2", "pacifico", "Banco del Pacífico", "corriente", "8091250"),
+  account("b3", "produbanco", "Produbanco", "de ahorros", "12040641835"),
+  account("b4", "pichincha", "Banco Pichincha", "de ahorros", "2203005219"),
+];
 
 interface Fake {
   deps: BotDeps;
@@ -27,7 +36,7 @@ interface Fake {
   receipts: Array<{ orderId: string; url: string }>;
 }
 
-function fakeDeps(options: { bank?: boolean; card?: boolean; receipt?: ReceiptOutcome; orders?: OrderSummary[] } = {}): Fake {
+function fakeDeps(options: { bank?: boolean; banks?: typeof FOUR_BANKS; card?: boolean; receipt?: ReceiptOutcome; orders?: OrderSummary[] } = {}): Fake {
   const created: BotState[] = [];
   const receipts: Array<{ orderId: string; url: string }> = [];
   return {
@@ -46,7 +55,7 @@ function fakeDeps(options: { bank?: boolean; card?: boolean; receipt?: ReceiptOu
         return options.receipt || { status: "stored", orderNumber: "MP-00001", total: 649, detectedAmount: 649, amountMatches: true, isReceipt: true };
       },
       findOrders: async () => options.orders || [],
-      bank: options.bank === false ? null : BANK,
+      banks: options.bank === false ? [] : options.banks || [BANK],
       cardEnabled: options.card !== false,
       supportPhone: "",
       storeUrl: "https://megaprinter.ec",
@@ -126,6 +135,41 @@ async function main() {
     assert.equal(fake.created[0].cart[0].productId, "p2");
   });
 
+  await test("varias cuentas: pregunta el banco SIN mandar los números y envía solo la elegida", async () => {
+    const fake = fakeDeps({ banks: FOUR_BANKS });
+    const results = await conversation(fake, ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "transferencia", "3", "si"]);
+    const ask = results[5];
+    assert.equal(ask.step, "bank");
+    assert.match(ask.reply, /A qué banco te queda mejor transferir\?[\s\S]*Banco Guayaquil[\s\S]*Produbanco/);
+    for (const bank of FOUR_BANKS) assert.doesNotMatch(ask.reply, new RegExp(bank.accountNumber), "no manda números de cuenta al preguntar");
+    assert.match(results[6].reply, /Transferencia bancaria · Produbanco/);
+    const done = results[7];
+    assert.equal(done.route, "checkoutTransfer");
+    assert.match(done.reply, /12040641835/);
+    assert.doesNotMatch(done.reply, /4386056|8091250|2203005219/, "solo la cuenta elegida");
+    assert.equal(fake.created[0].bankId, "b3");
+  });
+
+  await test("nombrar el banco elige transferencia y esa cuenta", async () => {
+    const results = await conversation(fakeDeps({ banks: FOUR_BANKS }), ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "te pago por pichincha"]);
+    assert.equal(results.at(-1)!.state.paymentMethod, "transfer");
+    assert.equal(results.at(-1)!.state.bankId, "b4");
+    assert.equal(results.at(-1)!.step, "confirm");
+  });
+
+  await test("'Guayaquil' en la dirección o 'Pichincha' como provincia no eligen banco", async () => {
+    const results = await conversation(fakeDeps({ banks: FOUR_BANKS }), ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Av. 9 de Octubre, Guayaquil"]);
+    assert.equal(results.at(-1)!.state.bankId, "");
+    const quito = await conversation(fakeDeps({ banks: FOUR_BANKS }), ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Calle Larga, Quito, Pichincha"]);
+    assert.equal(quito.at(-1)!.state.bankId, "");
+    assert.equal(quito.at(-1)!.step, "payment");
+  });
+
+  await test("en el paso de banco, 'guayaquil' sí es Banco Guayaquil", async () => {
+    const results = await conversation(fakeDeps({ banks: FOUR_BANKS }), ["monitor", "1", "Eva Ruiz", "eva@mail.com", "retiro", "transferencia", "guayaquil"]);
+    assert.equal(results.at(-1)!.state.bankId, "b1");
+  });
+
   await test("sin cuenta bancaria configurada no ofrece transferencia", async () => {
     const fake = fakeDeps({ bank: false });
     const results = await conversation(fake, ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito centro norte"]);
@@ -138,7 +182,7 @@ async function main() {
     const fake = fakeDeps({ bank: false, card: false });
     const results = await conversation(fake, ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito centro norte", "si"]);
     assert.equal(results.at(-1)!.intent, "orden_creada");
-    assert.match(results.at(-1)!.reply, /asesor/);
+    assert.match(results.at(-1)!.reply, /persona del equipo/);
     assert.equal(results.at(-1)!.route, "checkoutAdvisor");
   });
 
@@ -180,6 +224,28 @@ async function main() {
     assert.equal(fake.created.length, 0);
   });
 
+  await test("estilo Mila: ningún mensaje lleva ¿ ni ¡ al inicio", async () => {
+    const fake = fakeDeps({ banks: FOUR_BANKS });
+    const results = await conversation(fake, ["hola", "monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "transferencia", "2", "no", "si", "si"]);
+    for (const result of results) assert.doesNotMatch(result.reply, /[¿¡]/, result.decision);
+    assert.match(results[0].reply, /Soy \*Mila\*, la asistente virtual/);
+  });
+
+  await test("fuera de tema (política de Meta): no responde y vuelve a Megaprinter", async () => {
+    const fake = fakeDeps();
+    fake.deps.extract = async () => ({ intent: "fuera_de_tema", items: [], remove: [], searchQuery: "", suggestions: [], source: "ai" });
+    const result = (await conversation(fake, ["hazme la tarea de historia"]))[0];
+    assert.equal(result.decision, "R8:fuera_de_tema");
+    assert.match(result.reply, /Megaprinter/);
+  });
+
+  await test("'no me escribas' se respeta y se confirma", async () => {
+    const result = (await conversation(fakeDeps(), ["por favor no me escribas más"]))[0];
+    assert.equal(result.decision, "R0:no_escribir");
+    assert.equal(result.state.optOut, true);
+    assert.equal(wantsOptOut("hola, busco una laptop"), false);
+  });
+
   await test("pedir asesor deriva con intencion dudas", async () => {
     const result = (await conversation(fakeDeps(), ["quiero hablar con un asesor"]))[0];
     assert.equal(result.intent, "dudas");
@@ -206,7 +272,7 @@ async function main() {
   await test("foto o captura de IG de un producto que SÍ tenemos", async () => {
     const result = (await conversation(fakeDeps({ receipt: image({ productIds: ["p3"], exactMatch: true }) }), [{ media: "https://x/ig.jpg" }]))[0];
     assert.equal(result.decision, "R1:foto_producto_exacto");
-    assert.match(result.reply, /¡Sí lo tenemos![\s\S]*Epson L3250/);
+    assert.match(result.reply, /Sí lo tenemos![\s\S]*Epson L3250/);
     assert.equal(result.state.options.length, 1);
   });
 

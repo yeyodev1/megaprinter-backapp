@@ -5,11 +5,44 @@ enruta el mensaje y envía `{message}` al cliente. Gemini (`gemini-2.5-flash`) e
 mensaje y responde preguntas de productos usando el catálogo real; el backend valida todo lo que
 devuelve (ids del catálogo, correo, precios) y si Gemini falla sigue con reglas.
 
+## Personalidad: Mila
+
+El bot es **Mila**, la asistente virtual de Megaprinter (nombre configurable con `BOT_NAME`):
+cercana, amigable, nada formal, tutea y usa emojis. Signos de pregunta y exclamación **solo al
+final** ("Cómo prefieres pagar?"), nunca "¿" ni "¡": un filtro final los quita de todo lo que sale,
+incluidas las respuestas de Gemini.
+
+## Políticas de Meta (WhatsApp Business) y cómo se cumplen
+
+| Regla de Meta | Cómo la cumple el bot |
+|---|---|
+| Desde el 15-ene-2026 se prohíben los chatbots de **propósito general** (asistentes tipo ChatGPT); solo bots de un negocio concreto | Gemini solo responde sobre el catálogo, pedidos y servicio de Megaprinter. Lo que no es del negocio (tareas, recetas, política, programación…) se clasifica `fuera_de_tema` y Mila redirige con amabilidad (`R8:fuera_de_tema`). |
+| Escalamiento a una persona | "asesor", reclamo o garantía → `route = human` → flujo 🙋 Asesor humano + Silenciar. |
+| Responder dentro de 30 s | `/brain` decide sin IA (milisegundos). Los flujos usan Gemini con timeout de 12–15 s; si falla, siguen con reglas. |
+| Transparencia | Mila se presenta como *asistente virtual de Megaprinter*. |
+| Respetar a quien no quiere mensajes | "no me escribas", "stop", "no gracias" → Mila lo confirma y queda marcado (`optOut`). |
+| Mensajes fuera de plantilla solo dentro de la ventana de 24 h que abre el cliente; **cobrados desde el 1-oct-2026** | El bot **solo responde** (`{message}`) a lo que escribe el cliente: un mensaje por turno, nunca escribe primero. No hay envíos salientes ni recordatorios automáticos. |
+
+Fuentes: developers.facebook.com/documentation/business-messaging/whatsapp/pricing/non-template-messages,
+blog.chattigo.com (WhatsApp prohíbe chatbots de propósito general), developargentina.com (2026).
+
+## Cuentas para transferencias
+
+Se cargan en el panel: **Sistema → Pagos** (`/admin/payments`). Cada cuenta tiene banco (con logo
+automático), tipo, número, titular, RUC/cédula y un interruptor para pausarla. Con varias cuentas
+activas, Mila pregunta **"A qué banco te queda mejor transferir?"** mostrando solo los nombres; envía
+los datos de **una sola** cuenta, la elegida, y el pedido la guarda. En la web, `/pagar/:token` muestra
+los bancos con logo y la cuenta aparece al elegir. El cliente también puede decir el banco directo
+("te pago por Pichincha"); "Quito, Pichincha" en una dirección no cuenta como banco.
+
+Logos: servicio de íconos de Google por dominio (sin API key). Se puede poner una URL propia por cuenta.
+
 ## Flujo de una venta
 
 1. El cliente pregunta ("laptop i7", "¿cuál me sirve para diseño?") → el bot muestra opciones numeradas del catálogo.
 2. Elige ("1", "la segunda") → se agrega al carrito.
-3. El bot pide lo que falte, en orden: nombre, correo, dirección o *retiro*, forma de pago.
+3. El bot pide lo que falte, en orden: nombre, correo, dirección o *retiro*, forma de pago y, si es
+   transferencia con varias cuentas, el banco.
 4. Muestra el resumen y pide **sí**.
 5. Crea el pedido `MP-000xx` (canal `whatsapp_bot`) y responde según el pago:
    - **Tarjeta**: link `https://megaprinter.ec/pagar/<token>` con la caja de Payphone.

@@ -1,7 +1,8 @@
 import { BankDetails, bankText } from "../transfer.service";
+import { detectBank } from "../banks";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsTracking } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking } from "./intents";
 
 /**
  * MAQUINA DE ESTADOS DEL BOT DE WHATSAPP.
@@ -16,7 +17,7 @@ import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isY
  * preguntas · R9 siguiente paso.
  */
 
-export type Stage = "idle" | "choosing" | "name" | "email" | "address" | "payment" | "confirm" | "ordered";
+export type Stage = "idle" | "choosing" | "name" | "email" | "address" | "payment" | "bank" | "confirm" | "ordered";
 
 export interface CartLine {
   productId: string;
@@ -34,6 +35,10 @@ export interface BotState {
   customerEmail: string;
   address: string;
   paymentMethod: "card" | "transfer" | null;
+  /** Cuenta (banco) que eligio para transferir. */
+  bankId: string;
+  /** Pidio que no le escriban (queda registrado en la conversacion). */
+  optOut: boolean;
   orderId: string;
   orderNumber: string;
   lastQuestion: string;
@@ -47,6 +52,8 @@ export const createInitialState = (): BotState => ({
   customerEmail: "",
   address: "",
   paymentMethod: null,
+  bankId: "",
+  optOut: false,
   orderId: "",
   orderNumber: "",
   lastQuestion: "",
@@ -137,7 +144,8 @@ export interface BotDeps {
   receiveReceipt: (orderId: string, mediaUrl: string) => Promise<ReceiptOutcome>;
   /** Pedidos del telefono del chat, o el pedido con ese numero ("MP-00012"). */
   findOrders: (orderNumber?: string) => Promise<OrderSummary[]>;
-  bank: BankDetails | null;
+  /** Cuentas activas para transferir (vacio = transferencias apagadas). */
+  banks: BankDetails[];
   cardEnabled: boolean;
   supportPhone: string;
   storeUrl: string;
@@ -145,14 +153,25 @@ export interface BotDeps {
 
 // ─── Textos ──────────────────────────────────────────────────────────────────
 
-const QUESTIONS: Record<Exclude<Stage, "idle" | "choosing" | "confirm" | "ordered">, string> = {
-  name: "¿A nombre de quién va el pedido? (nombre y apellido)",
-  email: "¿Me compartes tu correo? Ahí te llega la confirmación 📧",
-  address: "¿A qué dirección y ciudad te lo enviamos? Si prefieres retirar en tienda, escribe *retiro*",
-  payment: "¿Cómo prefieres pagar?\n*1.* Tarjeta (te mando un link seguro de Payphone)\n*2.* Transferencia bancaria",
+const QUESTIONS: Record<Exclude<Stage, "idle" | "choosing" | "confirm" | "ordered" | "bank">, string> = {
+  name: "A nombre de quién va tu pedido? 😊 Pásame tu nombre y apellido",
+  email: "Y tu correo? 📧 Ahí te llega la confirmación de tu compra",
+  address: "A qué dirección y ciudad te lo enviamos? 🚚 Si prefieres retirarlo en la tienda, escríbeme *retiro* 🏪",
+  payment: "Cómo prefieres pagar? 💳\n*1.* Tarjeta (te paso un link seguro de Payphone 🔒)\n*2.* Transferencia bancaria 🏦",
 };
 
-const ASK_PRODUCT = "¿Qué estás buscando? 💻🖨️ Escríbeme algo como \"laptop i7 16GB\", \"impresora de tinta continua\" o pídeme el *catálogo*";
+/** Pregunta del paso. En "bank" solo se nombran los bancos: la cuenta se envia cuando elige. */
+function questionFor(stage: Stage, deps: BotDeps) {
+  if (stage === "bank") {
+    const list = deps.banks.map((account, index) => `*${index + 1}.* ${account.bank}`).join("\n");
+    return `A qué banco te queda mejor transferir? 🏦✨\n${list}\n\nRespóndeme con el número o el nombre del banco 😊`;
+  }
+  return QUESTIONS[stage as keyof typeof QUESTIONS] || "";
+}
+
+const chosenBank = (state: BotState, deps: BotDeps) => deps.banks.find((account) => account.id === state.bankId) || null;
+
+const ASK_PRODUCT = "Cuéntame qué estás buscando 💻🖨️✨ Puedes escribirme algo como \"laptop i7 16GB\" o \"impresora de tinta continua\", mandarme una foto 📸 o pedirme el *catálogo* 📚";
 
 export const FALLBACK_MESSAGE = ASK_PRODUCT;
 
@@ -168,9 +187,10 @@ export const cartTotal = (cart: CartLine[]) => Math.round(cart.reduce((sum, line
 const cartLines = (cart: CartLine[]) =>
   cart.map((line) => `• ${line.quantity} × ${line.name} — ${money(line.price * line.quantity)}`).join("\n");
 
-export function formatSummary(state: BotState) {
+export function formatSummary(state: BotState, deps?: BotDeps) {
+  const bank = deps ? chosenBank(state, deps) : null;
   return [
-    "Revisa tu pedido 🧾",
+    "Así va tu pedido 🛍️✨",
     "",
     cartLines(state.cart),
     `*Total: ${money(cartTotal(state.cart))}*`,
@@ -178,31 +198,31 @@ export function formatSummary(state: BotState) {
     `👤 ${state.customerName}`,
     `📧 ${state.customerEmail}`,
     `📍 ${state.address}`,
-    `💳 ${paymentLabel(state.paymentMethod)}`,
+    `💳 ${paymentLabel(state.paymentMethod)}${state.paymentMethod === "transfer" && bank ? ` · ${bank.bank}` : ""}`,
     "",
-    "¿Confirmo el pedido? Responde *sí* o dime qué cambio",
+    "Lo confirmo? Respóndeme *sí* 💙 o dime qué quieres cambiar",
   ].join("\n");
 }
 
 function transferInstructions(order: CreatedOrder, bank: BankDetails) {
   return [
-    `¡Listo! Tu pedido *${order.orderNumber}* quedó registrado 🎉`,
+    `Listo, tu pedido *${order.orderNumber}* ya está registrado 🎉💙`,
     "",
-    `Transfiere *${money(order.total)}* a esta cuenta:`,
+    `Transfiere *${money(order.total)}* a esta cuenta 👇`,
     bankText(bank),
     "",
-    "Cuando hagas la transferencia, envíame por aquí la *foto del comprobante* 📸 y nuestro equipo la valida.",
+    "Cuando hagas la transferencia, mándame por aquí la *foto del comprobante* 📸 y el equipo la valida enseguida 🙌",
   ].join("\n");
 }
 
 function cardInstructions(order: CreatedOrder) {
   return [
-    `¡Listo! Tu pedido *${order.orderNumber}* quedó registrado 🎉`,
+    `Listo, tu pedido *${order.orderNumber}* ya está registrado 🎉💙`,
     "",
-    `Paga *${money(order.total)}* con tarjeta en este link seguro de Payphone:`,
+    `Paga *${money(order.total)}* con tarjeta en este link seguro de Payphone 🔒👇`,
     order.paymentLink,
     "",
-    "Apenas se apruebe el pago te confirmamos y coordinamos la entrega 🚚",
+    "Apenas se apruebe el pago te aviso y coordinamos la entrega 🚚✨",
   ].join("\n");
 }
 
@@ -246,9 +266,15 @@ function missingStage(state: BotState, deps: BotDeps): Stage {
   if (!state.address) return "address";
   if (!state.paymentMethod) {
     // Con un solo metodo disponible no se pregunta.
-    if (deps.cardEnabled && !deps.bank) state.paymentMethod = "card";
-    else if (!deps.cardEnabled && deps.bank) state.paymentMethod = "transfer";
-    else if (deps.cardEnabled && deps.bank) return "payment";
+    const hasBanks = deps.banks.length > 0;
+    if (deps.cardEnabled && !hasBanks) state.paymentMethod = "card";
+    else if (!deps.cardEnabled && hasBanks) state.paymentMethod = "transfer";
+    else if (deps.cardEnabled && hasBanks) return "payment";
+  }
+  if (state.paymentMethod === "transfer" && deps.banks.length && !chosenBank(state, deps)) {
+    // Con una sola cuenta activa no se pregunta el banco.
+    if (deps.banks.length === 1) state.bankId = deps.banks[0].id;
+    else return "bank";
   }
   return "confirm";
 }
@@ -259,12 +285,20 @@ const looksLikeName = (text: string) => {
 };
 
 /** Aplica los datos que el cliente haya dado en cualquier momento (suelen mandar todo junto). */
-function applyCustomerData(state: BotState, extraction: Extraction, message: string) {
+function applyCustomerData(state: BotState, extraction: Extraction, message: string, deps: BotDeps) {
+  // "pago por Pichincha": transferencia a esa cuenta. Solo si se habla de pago:
+  // "Quito, Pichincha" en una direccion es la provincia, no el banco.
+  const talksPayment = ["payment", "bank", "confirm"].includes(state.stage) || /transfer|deposit|banco|pag[oa]|cuenta/.test(normalize(message));
+  const bank = talksPayment ? detectBank(message, deps.banks, state.stage === "bank") : null;
+  if (bank) {
+    state.paymentMethod = "transfer";
+    state.bankId = bank.id;
+  }
   if (extraction.customerName) state.customerName = extraction.customerName;
   const email = extractEmail(message) || extraction.customerEmail;
   if (email) state.customerEmail = email;
   if (extraction.address) state.address = extraction.address;
-  if (extraction.paymentMethod) state.paymentMethod = extraction.paymentMethod;
+  if (extraction.paymentMethod && !bank) state.paymentMethod = extraction.paymentMethod;
 }
 
 /** Datos del paso actual, con reglas (sirven aunque la IA este caida). */
@@ -290,16 +324,34 @@ function applyStageAnswer(state: BotState, message: string, deps: BotDeps): bool
         const choice = extractChoice(text, 2);
         state.paymentMethod = detectPaymentMethod(text) || (choice === 1 ? "card" : choice === 2 ? "transfer" : null);
       }
-      if (state.paymentMethod === "transfer" && !deps.bank) state.paymentMethod = null;
+      if (state.paymentMethod === "transfer" && !deps.banks.length) state.paymentMethod = null;
       if (state.paymentMethod === "card" && !deps.cardEnabled) state.paymentMethod = null;
       return Boolean(state.paymentMethod);
+    }
+    case "bank": {
+      if (!chosenBank(state, deps)) {
+        const choice = extractChoice(text, deps.banks.length);
+        const bank = choice ? deps.banks[choice - 1] : detectBank(text, deps.banks, true);
+        if (bank) state.bankId = bank.id;
+      }
+      return Boolean(chosenBank(state, deps));
     }
     default:
       return false;
   }
 }
 
-function reply(state: BotState, text: string, decision: string, extra: Partial<TurnResult> = {}): TurnResult {
+/** Nombre de la asistente (configurable con BOT_NAME). */
+export const botName = () => (process.env.BOT_NAME || "Mila").trim();
+
+/**
+ * Estilo de la marca: en WhatsApp nadie escribe "¿" ni "¡" al inicio, solo el
+ * signo final. Se aplica a TODO lo que sale, incluidas las respuestas de la IA.
+ */
+export const casualMarks = (text: string) => text.replace(/[¿¡]/g, "");
+
+function reply(state: BotState, rawText: string, decision: string, extra: Partial<TurnResult> = {}): TurnResult {
+  const text = casualMarks(rawText);
   state.lastQuestion = text.slice(-300);
   return { state, reply: text, route: "conversation", intent: "conversar", step: state.stage, decision, ...extra };
 }
@@ -309,17 +361,16 @@ function askNext(state: BotState, deps: BotDeps, decision: string, prefix = ""):
   state.stage = missingStage(state, deps);
   const join = (text: string) => (prefix ? `${prefix}\n\n${text}` : text);
   if (state.stage === "idle") return reply(state, join(ASK_PRODUCT), decision);
-  if (state.stage === "confirm") return reply(state, join(formatSummary(state)), decision, { route: "confirmOrder" });
-  const question = QUESTIONS[state.stage as keyof typeof QUESTIONS];
-  return reply(state, join(question), decision);
+  if (state.stage === "confirm") return reply(state, join(formatSummary(state, deps)), decision, { route: "confirmOrder" });
+  return reply(state, join(questionFor(state.stage, deps)), decision);
 }
 
 function showOptions(state: BotState, products: BotProduct[], decision: string, intro?: string): TurnResult {
   state.options = products.map(toOption);
   state.stage = "choosing";
   const list = products.map((product, index) => productLine(product, index + 1)).join("\n");
-  const ask = products.length === 1 ? "¿Te lo agrego al pedido? Responde *sí* o *1*" : "¿Cuál te agrego? Responde con el número";
-  return reply(state, `${intro || "Mira estas opciones 👇"}\n\n${list}\n\n${ask}`, decision);
+  const ask = products.length === 1 ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*" : "Cuál te agrego? 🛒 Respóndeme con el número";
+  return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}`, decision);
 }
 
 // ─── Turno ───────────────────────────────────────────────────────────────────
@@ -340,7 +391,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
             : "";
       return reply(
         state,
-        `¡Gracias! Recibí tu comprobante del pedido *${outcome.orderNumber}* 🙌 Nuestro equipo lo revisa y te confirmamos por aquí apenas se valide el pago.${warning}`,
+        `Gracias! 🙌 Recibí tu comprobante del pedido *${outcome.orderNumber}* 🧾 El equipo lo revisa y te confirmo por aquí apenas se valide el pago 💙${warning}`,
         "R1:comprobante",
         { intent: "comprobante_recibido", route: "receiptReceived", orderNumber: outcome.orderNumber, paymentMethod: "transfer", total: outcome.total },
       );
@@ -351,7 +402,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
       const matched = outcome.productIds.map((id) => byId.get(id)).filter((product): product is BotProduct => Boolean(product));
       const found = matched.length ? matched : searchProducts(catalog, outcome.searchQuery || outcome.description, 3);
       if (found.length && outcome.exactMatch) {
-        return showOptions(state, found.slice(0, 1), "R1:foto_producto_exacto", `¡Sí lo tenemos! 🙌 Veo ${outcome.description}:`);
+        return showOptions(state, found.slice(0, 1), "R1:foto_producto_exacto", `Sí lo tenemos! 🙌✨ Veo ${outcome.description}:`);
       }
       if (found.length) {
         return showOptions(state, found, "R1:foto_producto_parecido", `Veo ${outcome.description} 👀 Ese modelo exacto no lo tengo en tienda, pero estos son los más parecidos:`);
@@ -388,22 +439,28 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     if (outcome.status === "unsupported") {
       return reply(state, "Ese tipo de archivo no lo puedo abrir 🙏 Mándame una *foto* o *PDF* (comprobante o lo que buscas).", "R1:archivo_no_soportado");
     }
-    return reply(state, "No pude abrir tu archivo ahorita 😕 ¿Me lo reenvías en un momento?", "R1:archivo_error");
+    return reply(state, "Uy, no pude abrir tu archivo ahorita 😕 Me lo reenvías en un momentito? 🙏", "R1:archivo_error");
   }
 
   if (input.mediaWithoutUrl && !message) {
     if (input.mediaEvent === "video") return reply(state, VIDEO_REPLY, "R0:video_sin_url");
     if (input.mediaEvent === "audio") return reply(state, AUDIO_REPLY, "R0:audio_sin_url");
-    return reply(state, "No logré abrir tu archivo 😕 ¿Me lo reenvías como *foto*?", "R0:media_sin_url");
+    return reply(state, "Uy, no logré abrir tu archivo 😕 Me lo reenvías como *foto*? 📸", "R0:media_sin_url");
   }
 
   // R0: mensaje vacio.
   if (!message) return askNext(state, deps, "R0:mensaje_vacio");
 
+  // R0: no quiere mas mensajes. Se respeta (sin seguimientos) y se lo dice.
+  if (wantsOptOut(message) && !(state.stage === "confirm" || state.stage === "choosing")) {
+    state.optOut = true;
+    return reply(state, "Listo, no te escribo más 🙊💙 Si algún día me necesitas, aquí estoy para ayudarte ✨", "R0:no_escribir");
+  }
+
   // R2: pedir una persona.
   if (wantsHuman(message)) {
     const contact = deps.supportPhone ? ` También puedes escribir directo al ${deps.supportPhone}.` : "";
-    return reply(state, `Te paso con un asesor del equipo de Megaprinter 🙌 En breve te escribe por aquí.${contact}`, "R2:humano", {
+    return reply(state, `Claro! Te paso con una persona del equipo de Megaprinter 🙌💙 En un ratito te escribe por aquí.${contact}`, "R2:humano", {
       intent: "dudas",
       route: "human",
     });
@@ -412,7 +469,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   // R3: consultar pedidos (o "ya transferí" con el pedido abierto).
   if (wantsTracking(message) || orderNumberIn(message)) {
     if (state.stage === "ordered" && state.paymentMethod === "transfer" && /transfer|pague|deposit/.test(normalize(message))) {
-      return reply(state, "¡Genial! Envíame por aquí la *foto del comprobante* 📸 para que el equipo valide tu pago.", "R3:pedir_comprobante", {
+      return reply(state, "Genial! 🙌 Mándame por aquí la *foto del comprobante* 📸 y el equipo valida tu pago enseguida 💙", "R3:pedir_comprobante", {
         route: "awaitingReceipt",
         orderNumber: state.orderNumber,
         paymentMethod: "transfer",
@@ -451,7 +508,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     state.cart = [];
     state.options = [];
     state.stage = "idle";
-    return reply(state, "Listo, vacié tu carrito 🗑️ Si quieres ver otra cosa, dime qué buscas.", "R4:vaciar_carrito");
+    return reply(state, "Listo, vacié tu carrito 🗑️ Si quieres ver otra cosa, cuéntame qué buscas 😊", "R4:vaciar_carrito");
   }
 
   const catalog = await deps.loadCatalog();
@@ -481,12 +538,12 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
 
   // Despues de una orden, un producto nuevo arranca otro pedido (se conservan los datos del cliente).
   if (state.stage === "ordered" && (extraction.items.length || extraction.intent === "comprar")) {
-    Object.assign(state, { cart: [], options: [], paymentMethod: null, orderId: "", orderNumber: "", stage: "idle" });
+    Object.assign(state, { cart: [], options: [], paymentMethod: null, bankId: "", orderId: "", orderNumber: "", stage: "idle" });
   }
 
   if (state.stage === "ordered") {
     if (state.paymentMethod === "transfer" && /transfer|pague|deposit/.test(normalize(message))) {
-      return reply(state, "¡Genial! Envíame por aquí la *foto del comprobante* 📸 para que el equipo valide tu pago.", "R3:pedir_comprobante", {
+      return reply(state, "Genial! 🙌 Mándame por aquí la *foto del comprobante* 📸 y el equipo valida tu pago enseguida 💙", "R3:pedir_comprobante", {
         route: "awaitingReceipt",
         orderNumber: state.orderNumber,
         paymentMethod: "transfer",
@@ -495,7 +552,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     // Un saludo despues de la orden es una conversacion nueva (el pedido pudo
     // pagarse hace dias): no se repite la instruccion de pago.
     if (isGreeting(message)) {
-      Object.assign(state, { cart: [], options: [], paymentMethod: null, orderId: "", orderNumber: "", stage: "idle" });
+      Object.assign(state, { cart: [], options: [], paymentMethod: null, bankId: "", orderId: "", orderNumber: "", stage: "idle" });
       return reply(state, `¡Hola de nuevo! 👋 ${ASK_PRODUCT}
 
 Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
@@ -503,7 +560,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     if (extraction.intent !== "pregunta" && extraction.intent !== "catalogo") {
       return reply(
         state,
-        `Tu pedido *${state.orderNumber}* ya está registrado ✅ Para ver cómo va escribe *mi pedido*. ¿Te ayudo con algo más?`,
+        `Tu pedido *${state.orderNumber}* ya está registrado ✅ Si quieres ver cómo va, escríbeme *mi pedido* 📦 Te ayudo con algo más? 😊`,
         "R7:ya_registrado",
         { orderNumber: state.orderNumber },
       );
@@ -511,9 +568,9 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   }
 
   // R6: datos del cliente y cambios al carrito.
-  const dataBefore = JSON.stringify([state.customerName, state.customerEmail, state.address, state.paymentMethod]);
-  applyCustomerData(state, extraction, message);
-  if (state.paymentMethod === "transfer" && !deps.bank) state.paymentMethod = null;
+  const dataBefore = JSON.stringify([state.customerName, state.customerEmail, state.address, state.paymentMethod, state.bankId]);
+  applyCustomerData(state, extraction, message, deps);
+  if (state.paymentMethod === "transfer" && !deps.banks.length) state.paymentMethod = null;
   if (state.paymentMethod === "card" && !deps.cardEnabled) state.paymentMethod = null;
 
   for (const productId of extraction.remove) state.cart = state.cart.filter((line) => line.productId !== productId);
@@ -539,16 +596,17 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
       state.orderId = order.orderId;
       state.orderNumber = order.orderNumber;
       state.stage = "ordered";
+      const bank = chosenBank(state, deps);
       const text =
-        state.paymentMethod === "transfer" && deps.bank
-          ? transferInstructions(order, deps.bank)
+        state.paymentMethod === "transfer" && bank
+          ? transferInstructions(order, bank)
           : state.paymentMethod === "card" && order.paymentLink
             ? cardInstructions(order)
-            : `¡Listo! Tu pedido *${order.orderNumber}* quedó registrado 🎉 Un asesor te escribe para coordinar el pago y la entrega.`;
+            : `Listo, tu pedido *${order.orderNumber}* ya está registrado 🎉 Una persona del equipo te escribe para coordinar el pago y la entrega 💙`;
       return reply(state, text, "R7:orden_creada", {
         intent: "orden_creada",
         route:
-          state.paymentMethod === "transfer" && deps.bank
+          state.paymentMethod === "transfer" && bank
             ? "checkoutTransfer"
             : state.paymentMethod === "card" && order.paymentLink
               ? "checkoutCard"
@@ -560,15 +618,15 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
       });
     }
     if (isNo(message)) {
-      return reply(state, "¿Qué cambio? Escríbeme el dato nuevo (nombre, correo, dirección o forma de pago) o el producto que quieres agregar o quitar.", "R7:pedir_cambio");
+      return reply(state, "Claro! ✏️ Qué cambiamos? Escríbeme el dato nuevo (nombre, correo, dirección o forma de pago) o el producto que quieres agregar o quitar 😊", "R7:pedir_cambio");
     }
   }
 
   // Respuesta al paso pendiente (nombre, correo, direccion, pago) con reglas.
-  if (["name", "email", "address", "payment"].includes(state.stage) && applyStageAnswer(state, message, deps)) {
+  if (["name", "email", "address", "payment", "bank"].includes(state.stage) && applyStageAnswer(state, message, deps)) {
     return askNext(state, deps, `R6:dato_${state.stage}`);
   }
-  const dataChanged = dataBefore !== JSON.stringify([state.customerName, state.customerEmail, state.address, state.paymentMethod]);
+  const dataChanged = dataBefore !== JSON.stringify([state.customerName, state.customerEmail, state.address, state.paymentMethod, state.bankId]);
   if (state.stage === "confirm" && dataChanged) {
     return askNext(state, deps, "R7:dato_cambiado", "Actualizado 👍");
   }
@@ -582,8 +640,17 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   const resume = (text: string) => {
     if (pending === "idle") return text;
     state.stage = pending;
-    return `${text}\n\n${pending === "confirm" ? "¿Seguimos con tu pedido? Responde *sí* para confirmarlo" : QUESTIONS[pending as keyof typeof QUESTIONS]}`;
+    return `${text}\n\n${pending === "confirm" ? "Seguimos con tu pedido? 🛍️ Respóndeme *sí* para confirmarlo 💙" : questionFor(pending, deps)}`;
   };
+
+  // Politica de Meta (2026): nada de asistente de proposito general. Solo Megaprinter.
+  if (extraction.intent === "fuera_de_tema") {
+    return reply(
+      state,
+      resume(`Ay, eso no lo sé responder 🙈 Yo solo te ayudo con cosas de *Megaprinter*: equipos, impresoras, cámaras, servicio técnico y tus pedidos 💻🖨️✨`),
+      "R8:fuera_de_tema",
+    );
+  }
 
   if (extraction.intent === "catalogo") {
     return reply(state, resume(catalogOverview(catalog, deps.storeUrl)), "R8:catalogo", { intent: "menu", route: "catalog" });
@@ -611,7 +678,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
 
   // R9: saludo o algo que no se entendio: se retoma el paso pendiente.
   if (isGreeting(message) && !state.cart.length) {
-    return reply(state, `¡Hola! 👋 Soy el asistente de *Megaprinter*. ${ASK_PRODUCT}`, "R9:saludo");
+    return reply(state, `Hola! 👋💙 Soy *${botName()}*, la asistente virtual de *Megaprinter* ✨ ${ASK_PRODUCT}`, "R9:saludo");
   }
   if (state.stage === "choosing") {
     return reply(state, "No te entendí 🙏 Responde con el número de la opción que quieres, o dime qué otra cosa buscas.", "R9:eleccion_no_entendida");

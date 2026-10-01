@@ -7,8 +7,8 @@ import { notifyNewOrder } from "../services/email.service";
 import { geminiEnabled } from "../services/gemini.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
 import {
+  activeBankAccounts,
   attachReceipt,
-  bankDetails,
   describeImage,
   downloadReceipt,
   isAcceptedReceipt,
@@ -28,6 +28,7 @@ import {
   createInitialState,
   decideRoute,
   handleTurn,
+  casualMarks,
 } from "../services/whatsappBot/router";
 
 /**
@@ -245,7 +246,9 @@ async function createBotOrder(phone: string, state: BotState): Promise<CreatedOr
     channel: "whatsapp_bot",
     whatsappPhone: isLid(phone) ? "" : phone,
     status: source === "whatsapp" ? "whatsapp" : "pending",
-    ...(source === "transfer" ? { transfer: { status: "awaiting_receipt" } } : {}),
+    ...(source === "transfer"
+      ? { transfer: { status: "awaiting_receipt", account: (await activeBankAccounts()).find((account) => account.id === state.bankId) } }
+      : {}),
   });
 
   void notifyNewOrder(order, "WhatsApp (bot)");
@@ -353,7 +356,7 @@ async function buildDeps(phone: string): Promise<BotDeps> {
     createOrder: (state) => createBotOrder(phone, state),
     receiveReceipt: (orderId, mediaUrl) => receiveMedia(phone, orderId, mediaUrl),
     findOrders: (orderNumber) => findOrders(phone, orderNumber),
-    bank: await bankDetails(),
+    banks: await activeBankAccounts(),
     cardEnabled: cardEnabled(),
     supportPhone: SUPPORT_PHONE(),
     storeUrl: storeUrl(),
@@ -407,7 +410,7 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
   if (isResetKeyword(message)) {
     await WhatsAppSessionModel.replaceOne({ phone }, { phone, history: [], state: null }, { upsert: true });
     const state = createInitialState();
-    return { state, reply: "Listo, reinicié la conversación 🔄 ¿Qué estás buscando?", route: "conversation", intent: "conversar", step: "idle", decision: "R0:reinicio" };
+    return { state, reply: "Listo, empezamos de cero 🔄✨ Cuéntame qué estás buscando 😊", route: "conversation", intent: "conversar", step: "idle", decision: "R0:reinicio" };
   }
 
   const session = await acquireTurnLock(phone);
@@ -479,13 +482,13 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
 // ─── Respuestas ──────────────────────────────────────────────────────────────
 
 const NO_PHONE_MESSAGE = "No logré leer tu número de WhatsApp 🙏 Escríbenos de nuevo en un momento.";
-const ERROR_MESSAGE = "Dame un segundito 🙏 Se me cruzaron los cables con ese mensaje, ¿me lo repites?";
+const ERROR_MESSAGE = "Dame un segundito 🙏 Se me cruzaron los cables con ese mensaje, me lo repites? 😅";
 
 export const BOT_FALLBACK = {
   success: false,
   intencion: "conversar",
   route: "conversation",
-  message: "Tuve un problema procesando tu mensaje. ¿Me lo repites?",
+  message: "Uy, tuve un problemita con tu mensaje 😅 Me lo repites?",
   missingData: [],
 };
 
@@ -498,7 +501,7 @@ function toBotResponse(result: TurnResult | null) {
     telefonoSoporte: SUPPORT_PHONE(),
     route: result.route,
     // Nunca vacio: BuilderBot mandaria un mensaje en blanco.
-    message: result.reply || FALLBACK_MESSAGE,
+    message: casualMarks(result.reply || FALLBACK_MESSAGE),
     step: result.step,
     decision: result.decision,
     readyToCheckout: result.step === "confirm",
@@ -530,7 +533,7 @@ export async function whatsappBotDecide(req: Request, res: Response) {
     const startedAt = Date.now();
     const session: any = await WhatsAppSessionModel.findOne({ phone }, { state: 1 }).lean();
     const { route, reason } = decideRoute(session?.state, { message, mediaUrl, mediaEvent: Boolean(mediaEventKind(body)) }, {
-      bank: Boolean(await bankDetails()),
+      bank: (await activeBankAccounts()).length > 0,
       cardEnabled: cardEnabled(),
     });
     console.log(`[whatsapp-bot] ${phone} decide → ${route} (${reason})`);
@@ -612,7 +615,7 @@ export async function whatsappBotTransferReceipt(req: Request, res: Response) {
   // Sin archivo pero con texto ("¿cuanto era?"): se atiende como conversacion normal.
   // Un evento de video/audio sin URL tambien pasa: el turno responde que no se procesa.
   if (!readMediaUrl(body) && !readMessage(body) && !mediaEventKind(body)) {
-    return res.json({ ...BOT_FALLBACK, success: false, message: "No logré abrir tu archivo 😕 ¿Me reenvías la foto del comprobante?" });
+    return res.json({ ...BOT_FALLBACK, success: false, message: "Uy, no logré abrir tu archivo 😕 Me reenvías la foto? 📸" });
   }
   return whatsappBotTurn(req, res);
 }

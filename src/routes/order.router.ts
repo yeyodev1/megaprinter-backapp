@@ -7,6 +7,7 @@ import {
   getPaymentOrder,
   getPayphoneConfig,
   getTransferConfig,
+  choosePaymentBank,
   listOrders,
   reviewTransfer,
   updateOrderStatus,
@@ -43,6 +44,7 @@ router.get("/transfer/config", getTransferConfig);
 // Enlace privado de pago: lo abre el cliente desde el bot o tras el checkout web.
 router.get("/pay/:token", getPaymentOrder);
 router.post("/pay/:token/intent", createPaymentIntent);
+router.post("/pay/:token/bank", choosePaymentBank);
 router.post("/pay/:token/receipt", receiptUpload.single("receipt"), uploadPaymentReceipt);
 
 // Bot de WhatsApp (BuilderBot). Siempre responden 200; ver docs/whatsapp-bot.md.

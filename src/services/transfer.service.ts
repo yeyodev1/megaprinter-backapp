@@ -4,6 +4,7 @@ import cloudinary from "../config/cloudinary";
 import { geminiJson } from "./gemini.service";
 import { escapeHtml, sendStoreEmail } from "./email.service";
 import { PaymentSettingsModel } from "../models/paymentSettings.model";
+import { KNOWN_BANKS, bankLogo } from "./banks";
 
 /**
  * Pagos por transferencia: datos de la cuenta, comprobantes y aviso al equipo.
@@ -12,67 +13,101 @@ import { PaymentSettingsModel } from "../models/paymentSettings.model";
  * (/admin/payments). En Sorbito estaban escritos en cuatro lugares del codigo.
  */
 
-export interface BankDetails {
+/** Una cuenta para transferencias, tal como la carga el equipo en el panel. */
+export interface BankAccount {
+  id: string;
+  bankCode: string;
   bank: string;
   accountType: string;
   accountNumber: string;
   accountHolder: string;
   holderId: string;
+  logoUrl: string;
+  active: boolean;
 }
 
-export interface TransferSettings extends BankDetails {
+/** Datos de la cuenta que se le muestran al cliente (y se copian al pedido). */
+export type BankDetails = Omit<BankAccount, "active">;
+
+export interface TransferSettings {
   enabled: boolean;
+  accounts: BankAccount[];
 }
-
-const EMPTY: TransferSettings = { enabled: false, bank: "", accountType: "", accountNumber: "", accountHolder: "", holderId: "" };
 
 // Cache corto: el bot lee la configuracion en cada mensaje. Se limpia al guardar.
 let cache: { at: number; value: TransferSettings } | null = null;
 const CACHE_MS = 30_000;
 
+const toAccount = (raw: any): BankAccount => ({
+  id: String(raw._id || raw.id || ""),
+  bankCode: raw.bankCode || "otro",
+  bank: raw.bank || "",
+  accountType: raw.accountType || "",
+  accountNumber: raw.accountNumber || "",
+  accountHolder: raw.accountHolder || "",
+  holderId: raw.holderId || "",
+  logoUrl: raw.logoUrl || bankLogo(raw.bankCode || ""),
+  active: raw.active !== false,
+});
+
 export async function getTransferSettings(): Promise<TransferSettings> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.value;
   const doc: any = await PaymentSettingsModel.findById("payments").lean();
-  const value = { ...EMPTY, ...(doc?.transfer || {}) } as TransferSettings;
+  const transfer = doc?.transfer || {};
+  let accounts: BankAccount[] = (transfer.accounts || []).map(toAccount);
+  // Formato anterior: una sola cuenta en campos sueltos.
+  if (!accounts.length && transfer.accountNumber) accounts = [toAccount({ ...transfer, id: "legacy", bankCode: "otro" })];
+  const value = { enabled: transfer.enabled === true, accounts };
   cache = { at: Date.now(), value };
   return value;
 }
 
-export async function saveTransferSettings(input: Partial<TransferSettings>, updatedBy: string) {
-  const clean = (value: unknown) => (typeof value === "string" ? value.trim().slice(0, 120) : "");
-  const transfer: TransferSettings = {
-    enabled: input.enabled === true,
-    bank: clean(input.bank),
-    accountType: clean(input.accountType),
-    accountNumber: clean(input.accountNumber).replace(/\s+/g, ""),
-    accountHolder: clean(input.accountHolder),
-    holderId: clean(input.holderId).replace(/\s+/g, ""),
-  };
-  await PaymentSettingsModel.updateOne({ _id: "payments" }, { $set: { transfer, updatedBy } }, { upsert: true });
+export async function saveTransferSettings(input: { enabled?: boolean; accounts?: any[] }, updatedBy: string) {
+  const clean = (value: unknown, max = 120) => (typeof value === "string" ? value.trim().slice(0, max) : "");
+  const accounts = (Array.isArray(input.accounts) ? input.accounts : []).slice(0, 12).map((raw) => {
+    const bankCode = KNOWN_BANKS[clean(raw?.bankCode) as keyof typeof KNOWN_BANKS] ? clean(raw.bankCode) : "otro";
+    const known = KNOWN_BANKS[bankCode as keyof typeof KNOWN_BANKS];
+    return {
+      ...(/^[a-f\d]{24}$/i.test(String(raw?.id || "")) ? { _id: raw.id } : {}),
+      bankCode,
+      bank: known ? known.name : clean(raw?.bank, 80),
+      accountType: clean(raw?.accountType, 40),
+      accountNumber: clean(raw?.accountNumber, 30).replace(/\s+/g, ""),
+      accountHolder: clean(raw?.accountHolder, 100),
+      holderId: clean(raw?.holderId, 13).replace(/\s+/g, ""),
+      logoUrl: /^https:\/\//.test(clean(raw?.logoUrl, 500)) ? clean(raw.logoUrl, 500) : "",
+      active: raw?.active !== false,
+    };
+  });
+  await PaymentSettingsModel.updateOne(
+    { _id: "payments" },
+    {
+      $set: { "transfer.enabled": input.enabled === true, "transfer.accounts": accounts, updatedBy },
+      $unset: { "transfer.bank": 1, "transfer.accountType": 1, "transfer.accountNumber": 1, "transfer.accountHolder": 1, "transfer.holderId": 1 },
+    },
+    { upsert: true },
+  );
   cache = null;
-  return transfer;
+  return getTransferSettings();
 }
 
-const toDetails = ({ enabled: _enabled, ...details }: TransferSettings): BankDetails => details;
+const toDetails = ({ active: _active, ...details }: BankAccount): BankDetails => details;
 
-/** Cuenta para OFRECER transferencia a pedidos nuevos: null si esta apagada o incompleta. */
-export async function bankDetails(): Promise<BankDetails | null> {
+/** Cuentas para OFRECER transferencia a pedidos nuevos: vacio si esta apagada. */
+export async function activeBankAccounts(): Promise<BankDetails[]> {
   const settings = await getTransferSettings();
-  return settings.enabled && settings.accountNumber ? toDetails(settings) : null;
+  if (!settings.enabled) return [];
+  return settings.accounts.filter((account) => account.active && account.accountNumber).map(toDetails);
 }
 
-/**
- * Cuenta para un pedido YA creado por transferencia: se muestra aunque luego
- * se apague la opcion, porque ese cliente todavia tiene que pagar.
- */
-export async function transferAccount(): Promise<BankDetails | null> {
-  const settings = await getTransferSettings();
-  return settings.accountNumber ? toDetails(settings) : null;
+/** Todas las cuentas cargadas (para leer un comprobante o un pedido que ya existe). */
+export async function allBankAccounts(): Promise<BankDetails[]> {
+  return (await getTransferSettings()).accounts.filter((account) => account.accountNumber).map(toDetails);
 }
 
-export const transferEnabled = async () => (await bankDetails()) !== null;
+export const transferEnabled = async () => (await activeBankAccounts()).length > 0;
 
-/** Datos de la cuenta en formato WhatsApp. */
+/** Datos de UNA cuenta en formato WhatsApp. */
 export function bankText(details: BankDetails) {
   return [
     details.bank && `🏦 *${details.bank}*`,
@@ -169,13 +204,15 @@ Devuelve SOLO JSON: {"isReceipt":bool,"detectedAmount":number|null,"detectedAcco
  */
 export async function analyzeReceipt(
   file: ReceiptFile,
-  expected: { total: number; orderNumber: string },
+  expected: { total: number; orderNumber: string; account?: BankDetails | null },
 ): Promise<ReceiptAnalysis | null> {
   if (!file.mimeType.startsWith("image/")) return null;
-  const details = await transferAccount();
+  // La cuenta que eligio el cliente; si no eligio, cualquiera de las cargadas.
+  const candidates = expected.account ? [expected.account] : await allBankAccounts();
+  const accountsText = candidates.map((account) => `${account.accountNumber} (${account.bank}, a nombre de ${account.accountHolder || "-"})`).join("; ");
   const parsed = await geminiJson<any>({
     system: RECEIPT_PROMPT,
-    text: `Pedido ${expected.orderNumber}. Monto esperado: $${expected.total.toFixed(2)}. Cuenta destino esperada: ${details?.accountNumber || "(no configurada)"} ${details?.bank || ""} a nombre de ${details?.accountHolder || "(no configurado)"}.`,
+    text: `Pedido ${expected.orderNumber}. Monto esperado: $${expected.total.toFixed(2)}. Cuenta(s) destino válidas: ${accountsText || "(no configurada)"}.`,
     image: { mimeType: file.mimeType, base64: file.buffer.toString("base64") },
     maxOutputTokens: 400,
     timeoutMs: 15000,
@@ -186,14 +223,15 @@ export async function analyzeReceipt(
     ? Math.round(Number(parsed.detectedAmount) * 100) / 100
     : null;
   const accountDigits = String(parsed.detectedAccount || "").replace(/\D/g, "");
-  const expectedDigits = (details?.accountNumber || "").replace(/\D/g, "");
 
   return {
     isReceipt: typeof parsed.isReceipt === "boolean" ? parsed.isReceipt : null,
     amountMatches: detectedAmount === null ? null : Math.abs(detectedAmount - expected.total) < 0.01,
     // Los bancos enmascaran la cuenta: basta con que coincidan los ultimos 4 digitos.
     accountMatches:
-      accountDigits.length >= 4 && expectedDigits ? expectedDigits.endsWith(accountDigits.slice(-4)) : null,
+      accountDigits.length >= 4 && candidates.length
+        ? candidates.some((account) => account.accountNumber.replace(/\D/g, "").endsWith(accountDigits.slice(-4)))
+        : null,
     detectedAmount,
     detectedBank: String(parsed.detectedBank || "").slice(0, 80),
     detectedReference: String(parsed.detectedReference || "").slice(0, 80),
@@ -209,7 +247,7 @@ export async function attachReceipt(order: any, file: ReceiptFile, via: "whatsap
   const orderNumber = order.orderNumber || String(order._id);
   const [url, analysis] = await Promise.all([
     uploadReceipt(file, orderNumber),
-    analyzeReceipt(file, { total: order.totalAmount, orderNumber }),
+    analyzeReceipt(file, { total: order.totalAmount, orderNumber, account: order.transfer?.account?.accountNumber ? order.transfer.account : null }),
   ]);
 
   const receipts = [...(order.transfer?.receipts || []), { url, receivedAt: new Date(), via, analysis: analysis || {} }];

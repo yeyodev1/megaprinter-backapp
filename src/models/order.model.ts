@@ -77,6 +77,17 @@ const orderSchema = new Schema(
     },
     transfer: {
       status: { type: String, enum: TRANSFER_STATUSES },
+      // Cuenta que eligio el cliente (copia: si luego se edita en el panel, el pedido conserva la suya).
+      account: {
+        id: { type: String },
+        bankCode: { type: String },
+        bank: { type: String },
+        accountType: { type: String },
+        accountNumber: { type: String },
+        accountHolder: { type: String },
+        holderId: { type: String },
+        logoUrl: { type: String },
+      },
       receipts: { type: [receiptSchema], default: undefined },
       reviewedBy: { type: String },
       reviewedAt: { type: Date },

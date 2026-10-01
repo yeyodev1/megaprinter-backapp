@@ -3,7 +3,7 @@ import axios from "axios";
 import { ORDER_SOURCES, ORDER_STATUSES, OrderModel, OrderSource, OrderStatus } from "../models/order.model";
 import { AdminRequest } from "../middlewares/admin.middleware";
 import { notifyNewOrder } from "../services/email.service";
-import { attachReceipt, bankDetails, isAcceptedReceipt, transferAccount, transferEnabled } from "../services/transfer.service";
+import { activeBankAccounts, allBankAccounts, attachReceipt, isAcceptedReceipt, transferEnabled } from "../services/transfer.service";
 
 const PAYPHONE_CONFIRM_URL = "https://paymentbox.payphonetodoesposible.com/api/confirm";
 const PAYPHONE_APPROVED = 3;
@@ -256,14 +256,22 @@ async function publicOrder(order: any) {
             note: order.transfer?.status === "rejected" ? order.transfer?.note || "" : "",
           }
         : null,
-    bank: order.source === "transfer" ? await transferAccount() : null,
+    // Cuenta elegida; si aun no eligio banco, las cuentas activas para que elija.
+    bank: order.source === "transfer" && order.transfer?.account?.accountNumber ? order.transfer.account : null,
+    banks: order.source === "transfer" && !order.transfer?.account?.accountNumber ? await accountsForExistingOrder() : [],
   };
+}
+
+/** Un pedido ya creado puede pagarse aunque luego se apaguen las transferencias. */
+async function accountsForExistingOrder() {
+  const active = await activeBankAccounts();
+  return active.length ? active : allBankAccounts();
 }
 
 export async function getTransferConfig(_req: Request, res: Response, next: NextFunction) {
   try {
-    const bank = await bankDetails();
-    res.json({ enabled: bank !== null, bank });
+    const accounts = await activeBankAccounts();
+    res.json({ enabled: accounts.length > 0, accounts });
   } catch (error) {
     next(error);
   }
@@ -304,6 +312,23 @@ export async function createPaymentIntent(req: Request, res: Response, next: Nex
       customerEmail: order.customerEmail,
       customerPhone: order.customerPhone,
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** El cliente elige a que banco transferir desde su enlace de pago. */
+export async function choosePaymentBank(req: Request, res: Response, next: NextFunction) {
+  try {
+    const order = await findByToken(req.params.token);
+    if (!order) return res.status(404).json({ error: "No encontramos este pedido" });
+    if (order.source !== "transfer") return res.status(409).json({ error: "Este pedido no se paga por transferencia" });
+    if (order.status !== "pending") return res.status(409).json({ error: "Este pedido ya no espera pago" });
+    const account = (await accountsForExistingOrder()).find((item) => item.id === String(req.body?.accountId || ""));
+    if (!account) return res.status(400).json({ error: "Elige uno de los bancos disponibles" });
+    order.set("transfer.account", account);
+    await order.save();
+    res.json(await publicOrder(order));
   } catch (error) {
     next(error);
   }

@@ -1,6 +1,9 @@
 import { Request, Response, NextFunction } from "express";
 import axios from "axios";
-import { ORDER_STATUSES, OrderModel, OrderStatus } from "../models/order.model";
+import { ORDER_SOURCES, ORDER_STATUSES, OrderModel, OrderSource, OrderStatus } from "../models/order.model";
+import { AdminRequest } from "../middlewares/admin.middleware";
+import { notifyNewOrder } from "../services/email.service";
+import { attachReceipt, bankDetails, isAcceptedReceipt, transferAccount, transferEnabled } from "../services/transfer.service";
 
 const PAYPHONE_CONFIRM_URL = "https://paymentbox.payphonetodoesposible.com/api/confirm";
 const PAYPHONE_APPROVED = 3;
@@ -143,11 +146,15 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
     if (!isEmail(String(customerEmail))) {
       return res.status(400).json({ error: "El correo electrónico no es válido" });
     }
-    if (!["payphone", "whatsapp"].includes(source)) {
+    if (!ORDER_SOURCES.includes(source)) {
       return res.status(400).json({ error: "Origen de pedido no válido" });
+    }
+    if (source === "transfer" && !(await transferEnabled())) {
+      return res.status(400).json({ error: "El pago por transferencia no está disponible" });
     }
 
     const totalAmount = computeTotal(items);
+    const paymentSource = source as OrderSource;
 
     const order = await OrderModel.create({
       customerName: String(customerName).trim(),
@@ -156,20 +163,22 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
       address: address ? String(address).trim() : "",
       items,
       totalAmount,
-      source,
+      source: paymentSource,
+      channel: "web",
       clientTransactionId: clientTransactionId || "",
-      status: source === "whatsapp" ? "whatsapp" : "pending",
+      status: paymentSource === "whatsapp" ? "whatsapp" : "pending",
+      ...(paymentSource === "transfer" ? { transfer: { status: "awaiting_receipt" } } : {}),
     });
 
     const whatsappNumber = process.env.WHATSAPP_NUMBER || "593998028318";
 
     // La notificacion por correo no debe bloquear la respuesta: si Resend esta
     // caido el cliente igual necesita su enlace de WhatsApp.
-    void notifyByEmail(order.customerName, order.customerEmail, order.customerPhone, order.address, items, totalAmount);
+    void notifyNewOrder(order, "Tienda web");
 
     const itemsText = items.map((item) => `${item.name} (x${item.quantity})`).join(", ");
     const waText = encodeURIComponent(
-      `Hola Megaprinter! Soy ${order.customerName}. Deseo confirmar mi pedido:\n` +
+      `Hola Megaprinter! Soy ${order.customerName}. Deseo confirmar mi pedido ${order.orderNumber}:\n` +
         `- Productos: ${itemsText}\n` +
         `- Total: $${totalAmount.toFixed(2)}\n` +
         `- Dirección: ${order.address || "Guayaquil"}\n` +
@@ -180,55 +189,14 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
       success: true,
       message: "Pedido procesado con éxito",
       orderId: order.id,
+      orderNumber: order.orderNumber,
+      // Enlace privado de pago (/pagar/:token) para transferencias y Payphone.
+      paymentToken: order.paymentToken,
       totalAmount,
       whatsappLink: `https://wa.me/${whatsappNumber}?text=${waText}`,
     });
   } catch (error) {
     next(error);
-  }
-}
-
-async function notifyByEmail(
-  customerName: string,
-  customerEmail: string,
-  customerPhone: string,
-  address: string,
-  items: IncomingItem[],
-  totalAmount: number,
-) {
-  const resendApiKey = process.env.RESEND_API_KEY;
-  if (!resendApiKey) return;
-
-  const emailTo = process.env.EMAIL_TO || "megaprinter@bakano.ec";
-  const emailFrom = process.env.EMAIL_FROM || "Megaprinter Web <onboarding@resend.dev>";
-
-  const itemsList = items
-    .map((item) => `- ${item.name} (x${item.quantity}): $${(item.price * item.quantity).toFixed(2)}`)
-    .join("<br>");
-
-  try {
-    await axios.post(
-      "https://api.resend.com/emails",
-      {
-        from: emailFrom,
-        to: [emailTo],
-        reply_to: customerEmail,
-        subject: `Nuevo pedido de ${customerName} - $${totalAmount.toFixed(2)}`,
-        html: `
-          <h2>Nuevo pedido / cotización - Megaprinter</h2>
-          <p><strong>Cliente:</strong> ${customerName}</p>
-          <p><strong>Correo:</strong> ${customerEmail}</p>
-          <p><strong>Teléfono / WhatsApp:</strong> ${customerPhone}</p>
-          <p><strong>Dirección:</strong> ${address || "No especificada"}</p>
-          <h3>Productos / servicios:</h3>
-          <p>${itemsList}</p>
-          <h3>Total: $${totalAmount.toFixed(2)}</h3>
-        `,
-      },
-      { headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" } },
-    );
-  } catch (error: any) {
-    console.error("Resend email error:", error?.response?.data || error?.message);
   }
 }
 
@@ -256,6 +224,139 @@ export async function updateOrderStatus(req: Request, res: Response, next: NextF
       { new: true, runValidators: true },
     );
     if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+
+    res.json(order);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─── Enlace de pago (/pagar/:token) ──────────────────────────────────────────
+
+const findByToken = (token: unknown) =>
+  typeof token === "string" && token.length >= 16 ? OrderModel.findOne({ paymentToken: token }) : null;
+
+/** Datos publicos del pedido para la pagina de pago (sin correo ni telefono). */
+async function publicOrder(order: any) {
+  const receipts = order.transfer?.receipts || [];
+  return {
+    orderNumber: order.orderNumber || String(order._id),
+    customerName: order.customerName,
+    items: order.items.map((item: any) => ({ name: item.name, price: item.price, quantity: item.quantity })),
+    totalAmount: order.totalAmount,
+    status: order.status,
+    source: order.source,
+    createdAt: order.createdAt,
+    transfer:
+      order.source === "transfer"
+        ? {
+            status: order.transfer?.status || "awaiting_receipt",
+            receiptsCount: receipts.length,
+            lastReceiptAt: receipts.at(-1)?.receivedAt || null,
+            note: order.transfer?.status === "rejected" ? order.transfer?.note || "" : "",
+          }
+        : null,
+    bank: order.source === "transfer" ? await transferAccount() : null,
+  };
+}
+
+export async function getTransferConfig(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const bank = await bankDetails();
+    res.json({ enabled: bank !== null, bank });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getPaymentOrder(req: Request, res: Response, next: NextFunction) {
+  try {
+    const order = await findByToken(req.params.token);
+    if (!order) return res.status(404).json({ error: "No encontramos este pedido" });
+    res.json(await publicOrder(order));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Nuevo intento de pago con tarjeta para un pedido ya creado (enlace del bot).
+ * Cada intento usa un clientTransactionId nuevo: Payphone no acepta repetirlo
+ * y /pay-response confirma el pedido con ese id.
+ */
+export async function createPaymentIntent(req: Request, res: Response, next: NextFunction) {
+  try {
+    const order = await findByToken(req.params.token);
+    if (!order) return res.status(404).json({ error: "No encontramos este pedido" });
+    if (order.source !== "payphone") return res.status(409).json({ error: "Este pedido no se paga con tarjeta" });
+    if (["paid", "processing", "delivered"].includes(order.status)) {
+      return res.status(409).json({ error: "Este pedido ya está pagado" });
+    }
+
+    order.clientTransactionId = `MEGA-${Date.now()}`;
+    // Un intento rechazado deja el pedido cancelado; reintentar lo reabre.
+    if (order.status === "cancelled") order.status = "pending";
+    await order.save();
+
+    res.json({
+      clientTransactionId: order.clientTransactionId,
+      amount: order.totalAmount,
+      customerEmail: order.customerEmail,
+      customerPhone: order.customerPhone,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** Comprobante subido desde la pagina de pago (multipart, campo "receipt"). */
+export async function uploadPaymentReceipt(req: Request, res: Response, next: NextFunction) {
+  try {
+    const order = await findByToken(req.params.token);
+    if (!order) return res.status(404).json({ error: "No encontramos este pedido" });
+    if (order.source !== "transfer") return res.status(409).json({ error: "Este pedido no se paga por transferencia" });
+    if (order.status !== "pending" || order.transfer?.status === "approved") {
+      return res.status(409).json({ error: "Este pedido ya no espera comprobante" });
+    }
+    const file = req.file;
+    if (!file || !isAcceptedReceipt(file.mimetype)) {
+      return res.status(400).json({ error: "Sube una foto (JPG, PNG, WEBP) o un PDF del comprobante" });
+    }
+
+    await attachReceipt(order, { buffer: file.buffer, mimeType: file.mimetype }, "web");
+    res.status(201).json(await publicOrder(order));
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─── Revision de transferencias (panel) ──────────────────────────────────────
+
+/** El equipo aprueba o rechaza el comprobante. Aprobar marca el pedido como pagado. */
+export async function reviewTransfer(req: AdminRequest, res: Response, next: NextFunction) {
+  try {
+    const decision = req.body?.decision;
+    const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : "";
+    if (decision !== "approve" && decision !== "reject") {
+      return res.status(400).json({ error: "Decisión no válida" });
+    }
+
+    const order = await OrderModel.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+    if (order.source !== "transfer") return res.status(409).json({ error: "Este pedido no es por transferencia" });
+    if (decision === "approve" && !order.transfer?.receipts?.length) {
+      return res.status(409).json({ error: "El pedido aún no tiene comprobante" });
+    }
+    if (decision === "reject" && !note) {
+      return res.status(400).json({ error: "Escribe el motivo del rechazo: el cliente lo verá" });
+    }
+
+    order.set("transfer.status", decision === "approve" ? "approved" : "rejected");
+    order.set("transfer.reviewedBy", req.admin?.email || "");
+    order.set("transfer.reviewedAt", new Date());
+    order.set("transfer.note", note);
+    if (decision === "approve" && order.status === "pending") order.status = "paid";
+    await order.save();
 
     res.json(order);
   } catch (error) {

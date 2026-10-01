@@ -1,7 +1,7 @@
 import { BankDetails, bankText } from "../transfer.service";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsHuman, wantsTracking } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsTracking } from "./intents";
 
 /**
  * MAQUINA DE ESTADOS DEL BOT DE WHATSAPP.
@@ -571,4 +571,46 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     return reply(state, "No te entendí 🙏 Responde con el número de la opción que quieres, o dime qué otra cosa buscas.", "R9:eleccion_no_entendida");
   }
   return askNext(state, deps, "R9:siguiente_paso");
+}
+
+// ─── Decision del flujo principal (/brain) ───────────────────────────────────
+
+/** Rutas que decide /brain: a que flujo de BuilderBot va el mensaje. */
+export const DECISIONS = [
+  "conversation",
+  "catalog",
+  "checkoutCard",
+  "checkoutTransfer",
+  "checkoutAdvisor",
+  "searchOrder",
+  "receipt",
+  "human",
+] as const;
+export type Decision = (typeof DECISIONS)[number];
+
+/**
+ * Decide el flujo SIN procesar el mensaje: no cambia el carrito, no crea
+ * pedidos, no llama a la IA. Usa los mismos detectores que handleTurn, asi el
+ * endpoint del flujo destino responde lo mismo que se predijo. Si alguna vez
+ * difieren, el destino igual responde bien porque corre el turno completo.
+ */
+export function decideRoute(
+  previous: Partial<BotState> | null,
+  input: { message: string; mediaUrl?: string },
+  options: { bank: boolean; cardEnabled: boolean },
+): { route: Decision; reason: string } {
+  const state = { ...createInitialState(), ...(previous || {}) };
+  const message = input.message.trim();
+
+  if (input.mediaUrl) return { route: "receipt", reason: "archivo adjunto" };
+  if (!message) return { route: "conversation", reason: "mensaje vacio" };
+  if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
+  if (wantsTracking(message) || orderNumberIn(message)) return { route: "searchOrder", reason: "consulta de pedido" };
+  if (state.stage === "confirm" && isYes(message)) {
+    if (state.paymentMethod === "transfer" && options.bank) return { route: "checkoutTransfer", reason: "confirma pedido por transferencia" };
+    if (state.paymentMethod === "card" && options.cardEnabled) return { route: "checkoutCard", reason: "confirma pedido con tarjeta" };
+    return { route: "checkoutAdvisor", reason: "confirma pedido sin metodo de pago" };
+  }
+  if (wantsCatalog(message) && state.stage !== "choosing") return { route: "catalog", reason: "pide el catalogo" };
+  return { route: "conversation", reason: "conversacion" };
 }

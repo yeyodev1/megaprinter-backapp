@@ -32,11 +32,13 @@ Base: `https://megaprinter-backapp.vercel.app/api/orders/whatsapp-bot`
 
 | Endpoint | Uso |
 |---|---|
-| `POST /brain` | **Principal.** Toda la conversación, incluido el comprobante si llega su URL. |
-| `POST /assistant` | Alias de `/brain` (flows tipo Sorbito que mandan solo `{history}`). |
-| `POST /transfer-receipt` | Nodo opcional para el evento de imagen/documento. |
-| `GET\|POST /catalog` | Resumen del catálogo (con mensaje corre el turno completo). |
-| `GET\|POST /search-order` | Pedidos del teléfono o por número `MP-…`. |
+| `POST /brain` | **Flujo principal.** Solo decide `route`; `message` vacío. |
+| `POST /conversation` | Turno completo: responde y saca los datos. |
+| `POST /checkout` | Turno completo (el "sí" que crea el pedido). |
+| `POST /search-order` | Turno completo (estado de pedidos, "ya transferí", MP-). |
+| `POST /human` | Turno completo (aviso de que lo atiende una persona). |
+| `GET\|POST /catalog` | Turno completo; sin mensaje, solo el resumen del catálogo. |
+| `POST /transfer-receipt` | Comprobante (foto o PDF); con texto, turno normal. |
 
 Todas responden **HTTP 200** siempre (un 4xx/5xx deja al cliente sin respuesta).
 
@@ -75,56 +77,55 @@ Las Rules de BuilderBot van por **`route`** (ver "Flujos"). `decision` es solo p
 
 ## Flujos en BuilderBot
 
-Regla de oro: **solo el Flujo Principal decide.** Llama a `/brain`, envía `{message}` y salta con
-Rules por `route`. Los demás flujos **nunca llaman a `/brain`** (procesarían el mensaje dos veces).
-`route = conversation` no lleva Rule: el cliente sigue en el Principal.
+**`/brain` solo decide** a qué flujo va el mensaje (`route`). No responde al cliente ni toca el
+pedido ("Enviar al cliente" APAGADO). Cada flujo destino llama a su endpoint, que procesa el
+mensaje completo (saca los datos, arma el carrito, crea el pedido) y responde en `{message}`.
 
-| `route` | Qué pasó | Flujo destino | ¿Obligatorio? |
-|---|---|---|---|
-| `conversation` | Sigue la charla (busca, elige, da datos) | Ninguno | — |
-| `catalog` | Pidió el catálogo; ya recibió el resumen | Catálogo | Opcional |
-| `confirmOrder` | Ya recibió el resumen del pedido; falta su "sí" | Ninguno | — |
-| `checkoutCard` | Pedido creado, ya recibió el link de Payphone | Pago con tarjeta | Opcional |
-| `checkoutTransfer` | Pedido creado, ya recibió la cuenta bancaria | Esperar comprobante | Recomendado |
-| `awaitingReceipt` | Dijo "ya transferí" o dio su N.º MP-; se le pidió la foto | Esperar comprobante | Recomendado |
-| `receiptReceived` | Llegó el comprobante, queda en revisión | Ninguno | — |
-| `checkoutAdvisor` | Pedido creado sin método de pago activo | Asesor humano | Recomendado |
-| `searchOrder` | Ya recibió el estado de sus pedidos | Ninguno | — |
-| `human` | Pidió un asesor o tiene un reclamo | Asesor humano | **Sí** |
-
-En todos los nodos HTTP: `POST`, header `Content-Type: application/json`, **Body con campos (RAW apagado)**.
 Base: `https://megaprinter-backapp.vercel.app/api/orders/whatsapp-bot`.
+Todos los nodos HTTP: `POST`, header `Content-Type: application/json`, Body con campos (RAW apagado),
+`rawMessage = {body}`, `phone = {from}`.
 
-### 1. Flujo Principal (evento GENERAL)
-- HTTP `POST /brain` · `rawMessage = {body}` · `phone = {from}`
-- Enviar al cliente: **ON** con `{message}`
-- Rules por `route`: `human` → Asesor humano · `checkoutAdvisor` → Asesor humano ·
-  `checkoutTransfer` → Esperar comprobante · `awaitingReceipt` → Esperar comprobante ·
-  (opcionales) `catalog` → Catálogo · `checkoutCard` → Pago con tarjeta
-- Nunca una Rule hacia el mismo Flujo Principal (bucle).
+### Flujo Principal (evento GENERAL) → `/brain`, Enviar al cliente APAGADO
 
-### 2. Esperar comprobante (sin evento, solo por Rule)
-- Paso "esperar respuesta del cliente" (acepta imagen o documento).
-- HTTP `POST /transfer-receipt` · `phone = {from}` · `rawMessage = {body}` · `urlTempFile = <variable del archivo>`
-- Enviar al cliente: **ON** con `{message}`
-- Rule: `human` → Asesor humano. Ninguna Rule hacia este mismo flujo.
-- Si el cliente escribe texto en vez de la foto, el endpoint lo responde como conversación normal.
+| `route` | Cuándo | Flujo destino | Endpoint del destino |
+|---|---|---|---|
+| `conversation` | Todo lo demás: saluda, busca, elige, da sus datos, pregunta | Conversación | `/conversation` |
+| `catalog` | Pide el catálogo | Catálogo | `/catalog` |
+| `checkoutCard` | Dice "sí" al resumen y eligió tarjeta | Checkout tarjeta | `/checkout` |
+| `checkoutTransfer` | Dice "sí" al resumen y eligió transferencia | Checkout transferencia | `/checkout` |
+| `checkoutAdvisor` | Dice "sí" pero no hay método de pago activo | Checkout asesor | `/checkout` |
+| `searchOrder` | Pregunta por su pedido, "ya transferí" o escribe un MP- | Consultar pedido | `/search-order` |
+| `human` | Pide un asesor, reclamo o garantía | Asesor humano | `/human` |
+| `receipt` | Llega un archivo (si el evento entra por GENERAL) | Comprobante | `/transfer-receipt` |
 
-### 3. Comprobante (evento MEDIA / DOCUMENTO)
-Para comprobantes que llegan más tarde, fuera del flujo 2. Mismo nodo HTTP que el flujo 2, sin Rules.
+### Flujos destino → Enviar al cliente ENCENDIDO con `{message}`
 
-### 4. Asesor humano (sin evento, solo por Rule)
-El bot ya le dijo al cliente que lo atiende una persona. Este flujo solo **silencia el bot**
-(ej. 60 min) y avisa al equipo (notificación/etiqueta de BuilderBot). Sin nodo HTTP.
+Todos llevan las **mismas Rules por `route`** (lo que respondió el endpoint):
 
-### 5. Pago con tarjeta (opcional)
-El link ya va en `{message}`. Úsalo solo para etiquetar el chat o mandar un recordatorio. Sin nodo HTTP.
+| `route` de la respuesta | Ir a |
+|---|---|
+| `checkoutTransfer` o `awaitingReceipt` | Esperar comprobante |
+| `human` o `checkoutAdvisor` | Silenciar bot |
+| cualquier otra | Fin (sin Rule): el siguiente mensaje vuelve al Principal |
 
-### 6. Catálogo (opcional)
-El resumen ya va en `{message}`. Úsalo para enviar un PDF o imagen del catálogo. Sin nodo HTTP.
+Excepciones: **Asesor humano** no lleva Rules (después del HTTP va el paso Silenciar), y
+**Esperar comprobante** no lleva Rule hacia sí mismo.
 
-### Seguridad (opcional, recomendado)
-Con `WHATSAPP_BOT_SECRET` en Vercel, cada nodo HTTP debe mandar el header `X-Bot-Token: <valor>`.
+| Flujo | Endpoint | Después del HTTP |
+|---|---|---|
+| Conversación | `/conversation` | Rules comunes |
+| Catálogo | `/catalog` | Rules comunes (opcional: enviar PDF del catálogo) |
+| Checkout tarjeta | `/checkout` | Rules comunes (el link ya va en el mensaje) |
+| Checkout transferencia | `/checkout` | Rules comunes → Esperar comprobante |
+| Checkout asesor | `/checkout` | Rules comunes → Silenciar bot |
+| Consultar pedido | `/search-order` | Rules comunes ("ya transferí" → Esperar comprobante) |
+| Asesor humano | `/human` | Paso Silenciar (60 min) |
+| Esperar comprobante | paso esperar respuesta → `/transfer-receipt` + `urlTempFile` | Rule `human` → Silenciar bot |
+| Comprobante (evento MEDIA/DOCUMENTO) | `/transfer-receipt` + `urlTempFile` | Sin Rules |
+| Silenciar bot | — | Solo el paso Silenciar (sin HTTP ni texto) |
+
+Nunca una Rule hacia el mismo flujo (bucle). `/brain` y los destinos usan los mismos detectores:
+si alguna vez la decisión no coincide, el destino igual responde bien porque procesa el turno completo.
 
 ## Variables de entorno
 

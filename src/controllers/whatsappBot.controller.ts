@@ -17,8 +17,8 @@ import {
   ReceiptOutcome,
   TurnResult,
   createInitialState,
+  decideRoute,
   handleTurn,
-  orderStatusLine,
 } from "../services/whatsappBot/router";
 
 /**
@@ -419,57 +419,71 @@ function toBotResponse(result: TurnResult | null) {
     total: result.total ?? null,
     cart: result.state.cart.map((line) => ({ productId: line.productId, name: line.name, quantity: line.quantity, price: line.price })),
     missingData: [],
-    targetEndpoint: "/api/orders/whatsapp-bot/brain",
   };
 }
 
 const input = (req: Request) => ({ ...(req.query || {}), ...(req.body || {}) });
 
-/** POST /whatsapp-bot/brain (y /assistant): un solo nodo HTTP resuelve toda la conversacion. */
-export async function whatsappBotBrain(req: Request, res: Response) {
+/**
+ * POST /whatsapp-bot/brain — FLUJO PRINCIPAL. Solo DECIDE a que flujo va el
+ * mensaje (`route`); no responde al cliente ni toca el pedido. En BuilderBot:
+ * "Enviar al cliente" APAGADO y una Rule por cada `route`.
+ */
+export async function whatsappBotDecide(req: Request, res: Response) {
+  try {
+    const body = input(req);
+    const phone = readPhone(body);
+    const message = readMessage(body);
+    const mediaUrl = readMediaUrl(body);
+    if (!phone) return res.json({ success: false, route: "conversation", decision: "sin telefono", message: "" });
+    if (isResetKeyword(message)) return res.json({ success: true, route: "conversation", decision: "reinicio", message: "" });
+
+    const session: any = await WhatsAppSessionModel.findOne({ phone }, { state: 1 }).lean();
+    const { route, reason } = decideRoute(session?.state, { message, mediaUrl }, {
+      bank: Boolean(await bankDetails()),
+      cardEnabled: cardEnabled(),
+    });
+    console.log(`[whatsapp-bot] ${phone} decide → ${route} (${reason})`);
+    res.json({ success: true, route, decision: reason, step: session?.state?.stage || "idle", message: "" });
+  } catch (error) {
+    console.error("[whatsapp-bot] error en brain:", error);
+    // Ante cualquier falla, a conversacion: ese flujo siempre responde algo.
+    res.json({ success: false, route: "conversation", decision: "error", message: "" });
+  }
+}
+
+/**
+ * Endpoints de los flujos destino (/conversation, /checkout, /catalog,
+ * /search-order, /human). Todos procesan el mensaje completo y responden en
+ * `message`: el turno es la unica fuente de verdad, la ruta solo elige la puerta.
+ */
+export async function whatsappBotTurn(req: Request, res: Response) {
   try {
     res.json(toBotResponse(await runTurn(input(req))));
   } catch (error) {
-    console.error("[whatsapp-bot] error en brain:", error);
+    console.error("[whatsapp-bot] error en el turno:", error);
     res.json({ ...BOT_FALLBACK, message: ERROR_MESSAGE });
   }
 }
 
-/** POST /whatsapp-bot/transfer-receipt: nodo dedicado para el evento de imagen/documento. */
+/** POST /whatsapp-bot/transfer-receipt: foto o PDF del comprobante (flujo de imagen/documento). */
 export async function whatsappBotTransferReceipt(req: Request, res: Response) {
   const body = input(req);
   // Sin archivo pero con texto ("¿cuanto era?"): se atiende como conversacion normal.
   if (!readMediaUrl(body) && !readMessage(body)) {
     return res.json({ ...BOT_FALLBACK, success: false, message: "No logré abrir tu archivo 😕 ¿Me reenvías la foto del comprobante?" });
   }
-  return whatsappBotBrain(req, res);
+  return whatsappBotTurn(req, res);
 }
 
-/** GET|POST /whatsapp-bot/catalog: resumen del catalogo (con mensaje, corre el turno completo). */
+/** GET|POST /whatsapp-bot/catalog: con mensaje corre el turno; sin mensaje, solo el resumen. */
 export async function whatsappBotCatalog(req: Request, res: Response) {
   try {
     const body = input(req);
-    if (readMessage(body) && readPhone(body)) return whatsappBotBrain(req, res);
+    if (readMessage(body) && readPhone(body)) return whatsappBotTurn(req, res);
     res.json({ success: true, intencion: "menu", route: "catalog", message: catalogOverview(await loadCatalog(), storeUrl()), missingData: [] });
   } catch (error) {
     console.error("[whatsapp-bot] error en catalog:", error);
-    res.json({ ...BOT_FALLBACK, message: ERROR_MESSAGE });
-  }
-}
-
-/** GET|POST /whatsapp-bot/search-order: pedidos del telefono (o por numero MP-…). */
-export async function whatsappBotSearchOrder(req: Request, res: Response) {
-  try {
-    const body = input(req);
-    const phone = readPhone(body);
-    const wanted = (readMessage(body) || clean(body.orderNumber)).match(/\bMP-?\s?(\d{1,6})\b/i)?.[1];
-    const orders = await findOrders(phone, wanted ? `MP-${wanted.padStart(5, "0")}` : undefined);
-    const message = orders.length
-      ? `Estos son tus pedidos:\n\n${orders.slice(0, 3).map(orderStatusLine).join("\n")}`
-      : "No encuentro pedidos con este número de WhatsApp 🤔 Escríbeme tu número de pedido (MP-…) o pídeme un *asesor*.";
-    res.json({ success: orders.length > 0, intencion: "consultar_pedido", route: "searchOrder", message, orders: orders.slice(0, 3), missingData: [] });
-  } catch (error) {
-    console.error("[whatsapp-bot] error en search-order:", error);
     res.json({ ...BOT_FALLBACK, message: ERROR_MESSAGE });
   }
 }

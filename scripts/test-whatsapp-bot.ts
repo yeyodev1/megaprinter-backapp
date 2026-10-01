@@ -8,7 +8,7 @@ import assert from "assert/strict";
 import { BotProduct } from "../src/services/whatsappBot/catalog";
 import { aiExtract, cleanAnswer, heuristicExtract, answerPricesAreReal } from "../src/services/whatsappBot/extractor";
 import * as gemini from "../src/services/gemini.service";
-import { BotDeps, BotState, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, handleTurn } from "../src/services/whatsappBot/router";
+import { BotDeps, BotState, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
 import { latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod } from "../src/services/whatsappBot/intents";
 
@@ -267,6 +267,34 @@ async function main() {
     assert.equal(result.decision, "R8:pregunta_con_opciones");
     assert.match(result.reply, /Para diseño[\s\S]*\*1\.\* Laptop Dell/);
     assert.equal(result.state.options[0].productId, "p2");
+  });
+
+  await test("/brain decide la ruta sin tocar el pedido", () => {
+    const on = { bank: true, cardEnabled: true };
+    const confirmCard = { ...createInitialState(), stage: "confirm" as const, paymentMethod: "card" as const, cart: [{ productId: "p1", name: "HP", price: 649, quantity: 1 }] };
+    assert.equal(decideRoute(null, { message: "hola" }, on).route, "conversation");
+    assert.equal(decideRoute(null, { message: "quiero ver el catálogo" }, on).route, "catalog");
+    assert.equal(decideRoute(null, { message: "quiero hablar con un asesor" }, on).route, "human");
+    assert.equal(decideRoute(null, { message: "cuál es el estado de mi pedido" }, on).route, "searchOrder");
+    assert.equal(decideRoute(null, { message: "", mediaUrl: "https://x/y.jpg" }, on).route, "receipt");
+    assert.equal(decideRoute(confirmCard, { message: "sí" }, on).route, "checkoutCard");
+    assert.equal(decideRoute({ ...confirmCard, paymentMethod: "transfer" }, { message: "dale" }, on).route, "checkoutTransfer");
+    assert.equal(decideRoute({ ...confirmCard, paymentMethod: "transfer" }, { message: "si" }, { bank: false, cardEnabled: true }).route, "checkoutAdvisor");
+    assert.equal(decideRoute(confirmCard, { message: "no, cambia el correo" }, on).route, "conversation");
+    const before = JSON.stringify(confirmCard);
+    decideRoute(confirmCard, { message: "sí" }, on);
+    assert.equal(JSON.stringify(confirmCard), before, "no modifica el estado");
+  });
+
+  await test("lo que decide /brain coincide con lo que responde el flujo destino", async () => {
+    for (const [method, expected] of [["tarjeta", "checkoutCard"], ["transferencia", "checkoutTransfer"]] as const) {
+      const fake = fakeDeps();
+      const results = await conversation(fake, ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", method]);
+      const state = results.at(-1)!.state;
+      assert.equal(decideRoute(state, { message: "si" }, { bank: true, cardEnabled: true }).route, expected);
+      const turn = await handleTurn(state, { message: "si" }, fake.deps);
+      assert.equal(turn.route, expected);
+    }
   });
 
   await test("formato de la IA: viñetas con * no rompen las negritas", () => {

@@ -13,10 +13,10 @@ import {
   uploadPaymentReceipt,
 } from "../controllers/order.controller";
 import {
-  whatsappBotBrain,
   whatsappBotCatalog,
-  whatsappBotSearchOrder,
+  whatsappBotDecide,
   whatsappBotTransferReceipt,
+  whatsappBotTurn,
 } from "../controllers/whatsappBot.controller";
 import { requireAdmin } from "../middlewares/admin.middleware";
 import { CustomError } from "../errors/customError.error";
@@ -46,10 +46,16 @@ router.post("/pay/:token/intent", createPaymentIntent);
 router.post("/pay/:token/receipt", receiptUpload.single("receipt"), uploadPaymentReceipt);
 
 // Bot de WhatsApp (BuilderBot). Siempre responden 200; ver docs/whatsapp-bot.md.
-router.all("/whatsapp-bot/brain", whatsappBotBrain);
-router.all("/whatsapp-bot/assistant", whatsappBotBrain);
-router.all("/whatsapp-bot/transfer-receipt", whatsappBotTransferReceipt);
+// Flujo principal: solo decide la ruta (no responde al cliente).
+router.all("/whatsapp-bot/brain", whatsappBotDecide);
+router.all("/whatsapp-bot/router", whatsappBotDecide);
+// Flujos destino: procesan el mensaje y responden en `message`.
+router.all("/whatsapp-bot/conversation", whatsappBotTurn);
+router.all("/whatsapp-bot/checkout", whatsappBotTurn);
+router.all("/whatsapp-bot/search-order", whatsappBotTurn);
+router.all("/whatsapp-bot/human", whatsappBotTurn);
+router.all("/whatsapp-bot/assistant", whatsappBotTurn);
 router.all("/whatsapp-bot/catalog", whatsappBotCatalog);
-router.all("/whatsapp-bot/search-order", whatsappBotSearchOrder);
+router.all("/whatsapp-bot/transfer-receipt", whatsappBotTransferReceipt);
 
 export default router;

@@ -1,26 +1,38 @@
 import axios from "axios";
 
+const emailFrom = () => process.env.EMAIL_FROM || "Megaprinter Web <onboarding@resend.dev>";
+
 /**
- * Correo al equipo de Megaprinter via Resend. Nunca lanza: un correo caido no
- * debe tumbar un pedido ni la respuesta del bot.
+ * Correos del equipo: team@megaprinter.ec siempre, mas EMAIL_TO si existe
+ * (separados por coma).
  */
-export async function sendStoreEmail(subject: string, html: string, replyTo?: string) {
+export const storeRecipients = () => [
+  ...new Set(["team@megaprinter.ec", ...(process.env.EMAIL_TO || "").split(",")].map((value) => value.trim().toLowerCase()).filter(Boolean)),
+];
+
+/**
+ * Envio via Resend. Nunca lanza: un correo caido no debe tumbar un pedido ni
+ * la respuesta del bot. OJO: con el remitente de prueba (onboarding@resend.dev)
+ * Resend solo entrega al dueño de la cuenta; para llegar a clientes hay que
+ * verificar el dominio y poner EMAIL_FROM (ej. "Megaprinter <pedidos@megaprinter.ec>").
+ */
+export async function sendEmail(to: string | string[], subject: string, html: string, replyTo?: string) {
   const resendApiKey = process.env.RESEND_API_KEY;
-  if (!resendApiKey) return;
-
-  const emailTo = process.env.EMAIL_TO || "megaprinter@bakano.ec";
-  const emailFrom = process.env.EMAIL_FROM || "Megaprinter Web <onboarding@resend.dev>";
-
+  const recipients = (Array.isArray(to) ? to : [to]).filter(Boolean);
+  if (!resendApiKey || !recipients.length) return;
   try {
     await axios.post(
       "https://api.resend.com/emails",
-      { from: emailFrom, to: [emailTo], ...(replyTo ? { reply_to: replyTo } : {}), subject, html },
-      { headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" } },
+      { from: emailFrom(), to: recipients, ...(replyTo ? { reply_to: replyTo } : {}), subject, html },
+      { headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" }, timeout: 10000 },
     );
   } catch (error: any) {
-    console.error("Resend email error:", error?.response?.data || error?.message);
+    console.error(`[correo] no se pudo enviar "${subject}" a ${recipients.join(", ")}:`, error?.response?.data || error?.message);
   }
 }
+
+/** Correo al equipo de Megaprinter. */
+export const sendStoreEmail = (subject: string, html: string, replyTo?: string) => sendEmail(storeRecipients(), subject, html, replyTo);
 
 export const escapeHtml = (value: unknown) =>
   String(value ?? "").replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);

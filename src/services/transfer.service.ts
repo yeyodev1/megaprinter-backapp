@@ -284,7 +284,7 @@ export interface ImageInsight {
 
 const IMAGE_PROMPT = `Eres el asistente de Megaprinter (tienda de tecnología en Ecuador: laptops, all in one, monitores, impresoras, cámaras de seguridad). Un cliente mandó esta imagen por WhatsApp. Puede ser una foto, una captura de Instagram (de Megaprinter o de otra tienda), una publicidad o un comprobante bancario.
 Devuelve SOLO JSON: {"kind":"receipt|product|other","description":"","searchQuery":"","matches":[0],"exactMatch":false}
-- kind "receipt": comprobante de transferencia, depósito o pago bancario.
+- kind "receipt": comprobante de transferencia, depósito o pago bancario, o captura de un pago con tarjeta aprobado (Payphone, voucher, "pago exitoso").
 - kind "product": muestra un equipo de tecnología o una publicación/anuncio de uno (lee el texto de la imagen: marca, modelo, specs, precio).
 - kind "other": cualquier otra cosa.
 - description: frase corta en español de lo que se ve (ej. "una impresora Epson L3250 negra", "una publicación de Instagram de una laptop HP 15").

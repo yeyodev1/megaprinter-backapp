@@ -7,6 +7,7 @@ export const ORDER_STATUSES = [
   "whatsapp", // solicitud enviada por WhatsApp, por contactar
   "paid", // pago aprobado
   "processing", // en preparacion
+  "shipped", // enviado (con guia)
   "delivered", // entregado al cliente
   "cancelled",
 ] as const;
@@ -77,6 +78,18 @@ const orderSchema = new Schema(
       type: String,
       default: () => crypto.randomBytes(18).toString("base64url"),
       index: { unique: true, sparse: true },
+    },
+    // Guia de envio: la carga el equipo desde el panel y le llega al cliente.
+    shipping: {
+      carrier: { type: String },
+      trackingNumber: { type: String },
+      guideUrl: { type: String },
+      shippedAt: { type: Date },
+    },
+    // Cada cambio de etapa (quien y cuando), para el panel y la pagina de seguimiento.
+    statusHistory: {
+      type: [{ _id: false, status: String, at: { type: Date, default: Date.now }, by: String }],
+      default: undefined,
     },
     transfer: {
       status: { type: String, enum: TRANSFER_STATUSES },

@@ -2,7 +2,9 @@ import { Request, Response, NextFunction } from "express";
 import { PAYPHONE_APPROVED, applyPayphoneResult, confirmPayphoneTransaction } from "../services/payphone.service";
 import { ORDER_SOURCES, ORDER_STATUSES, OrderModel, OrderSource, OrderStatus } from "../models/order.model";
 import { AdminRequest } from "../middlewares/admin.middleware";
-import { notifyNewOrder } from "../services/email.service";
+import { notifyOrderCreated, notifyStatusChange, notifyTransferRejected, recordStatus } from "../services/orderNotifications.service";
+import cloudinary from "../config/cloudinary";
+import { UploadApiResponse } from "cloudinary";
 import { activeBankAccounts, allBankAccounts, attachReceipt, isAcceptedReceipt, transferEnabled } from "../services/transfer.service";
 
 
@@ -76,11 +78,14 @@ export async function confirmPayphonePayment(req: Request, res: Response, next: 
 
     // Idempotencia: Payphone puede reintentar el retorno, el cliente recargar la
     // pagina o el bot haber confirmado antes cuando escribio "pagado".
-    if (["paid", "processing", "delivered"].includes(order.status)) {
+    if (["paid", "processing", "shipped", "delivered"].includes(order.status)) {
       return res.json({
         statusCode: PAYPHONE_APPROVED,
         transactionStatus: "Approved",
         message: "El pago ya estaba confirmado",
+        orderNumber: order.orderNumber,
+        channel: order.channel,
+        token: order.paymentToken,
       });
     }
 
@@ -92,7 +97,8 @@ export async function confirmPayphonePayment(req: Request, res: Response, next: 
       });
     }
 
-    return res.json(data);
+    // La pagina de confirmacion muestra el pedido y el boton para volver a WhatsApp.
+    return res.json({ ...data, orderNumber: order.orderNumber, channel: order.channel, token: order.paymentToken });
   } catch (error) {
     next(error);
   }
@@ -145,7 +151,7 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
 
     // La notificacion por correo no debe bloquear la respuesta: si Resend esta
     // caido el cliente igual necesita su enlace de WhatsApp.
-    void notifyNewOrder(order, "Tienda web");
+    notifyOrderCreated(order, "Tienda web");
 
     const itemsText = items.map((item) => `${item.name} (x${item.quantity})`).join(", ");
     const waText = encodeURIComponent(
@@ -182,21 +188,134 @@ export async function listOrders(req: Request, res: Response, next: NextFunction
   }
 }
 
-export async function updateOrderStatus(req: Request, res: Response, next: NextFunction) {
+export async function updateOrderStatus(req: AdminRequest, res: Response, next: NextFunction) {
   try {
     const status = req.body?.status as OrderStatus;
     if (!ORDER_STATUSES.includes(status)) {
       return res.status(400).json({ error: "Estado de pedido no válido" });
     }
 
-    const order = await OrderModel.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true, runValidators: true },
-    );
+    const order = await OrderModel.findById(req.params.id);
     if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+    if (order.status === status) return res.json(order);
+
+    order.status = status;
+    recordStatus(order, status, req.admin?.email || "");
+    await order.save();
+    // Cada etapa le llega al cliente por correo; "pagado" tambien avisa al equipo.
+    notifyStatusChange(order, status, req.admin?.email || "");
 
     res.json(order);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Guia de envio (multipart: carrier, trackingNumber, guide = archivo opcional).
+ * Guardarla pasa el pedido a "Enviado" y le manda la guia al cliente.
+ */
+export async function updateShipping(req: AdminRequest, res: Response, next: NextFunction) {
+  try {
+    const order = await OrderModel.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+    const carrier = typeof req.body?.carrier === "string" ? req.body.carrier.trim().slice(0, 80) : "";
+    const trackingNumber = typeof req.body?.trackingNumber === "string" ? req.body.trackingNumber.trim().slice(0, 80) : "";
+    if (!carrier && !trackingNumber && !req.file) {
+      return res.status(400).json({ error: "Escribe el transportista o el número de guía, o sube el archivo de la guía" });
+    }
+
+    let guideUrl = order.shipping?.guideUrl || "";
+    if (req.file) {
+      const file = req.file;
+      const upload = await new Promise<UploadApiResponse>((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder: "megaprinter/guides", public_id: `${order.orderNumber || order.id}-${Date.now()}`, resource_type: file.mimetype === "application/pdf" ? "raw" : "image" },
+          (error, result) => (error || !result ? reject(error || new Error("Cloudinary upload failed")) : resolve(result)),
+        );
+        stream.end(file.buffer);
+      });
+      guideUrl = upload.secure_url;
+    }
+
+    order.set("shipping", {
+      carrier: carrier || order.shipping?.carrier || "",
+      trackingNumber: trackingNumber || order.shipping?.trackingNumber || "",
+      guideUrl,
+      shippedAt: order.shipping?.shippedAt || new Date(),
+    });
+    const moved = order.status !== "shipped" && order.status !== "delivered";
+    if (moved) {
+      order.status = "shipped";
+      recordStatus(order, "shipped", req.admin?.email || "");
+    }
+    await order.save();
+    // Con la guia nueva o actualizada, el cliente recibe el correo de "va en camino".
+    notifyStatusChange(order, "shipped", req.admin?.email || "");
+    res.json(order);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─── Seguimiento publico (/pedido) ────────────────────────────────────────────
+
+/** Lo que el cliente ve de su pedido: sin correo, telefono ni direccion. */
+function trackingView(order: any) {
+  return {
+    orderNumber: order.orderNumber || String(order._id).slice(-6).toUpperCase(),
+    token: order.paymentToken,
+    customerName: String(order.customerName || "").split(/\s+/)[0],
+    createdAt: order.createdAt,
+    items: (order.items || []).map((item: any) => ({ name: item.name, price: item.price, quantity: item.quantity })),
+    totalAmount: order.totalAmount,
+    status: order.status,
+    source: order.source,
+    channel: order.channel || "web",
+    transferStatus: order.transfer?.status || null,
+    statusHistory: (order.statusHistory || []).map((entry: any) => ({ status: entry.status, at: entry.at })),
+    shipping: order.shipping?.carrier || order.shipping?.trackingNumber || order.shipping?.guideUrl ? order.shipping : null,
+  };
+}
+
+const lookups = new Map<string, number[]>();
+/** Limite simple: 20 busquedas por minuto por IP (evita recorrer pedidos ajenos). */
+function tooManyLookups(ip: string) {
+  const now = Date.now();
+  const recent = (lookups.get(ip) || []).filter((at) => now - at < 60_000);
+  recent.push(now);
+  lookups.set(ip, recent);
+  return recent.length > 20;
+}
+
+/** GET /api/orders/track?q=MP-00012 | correo@cliente.com */
+export async function trackOrders(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (tooManyLookups(String(req.ip || req.headers["x-forwarded-for"] || "anon"))) {
+      return res.status(429).json({ error: "Demasiadas búsquedas. Intenta en un minuto." });
+    }
+    const query = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const codeMatch = query.match(/^(?:mp)?-?\s*(\d{1,6})$/i);
+    let orders: any[] = [];
+    if (codeMatch) {
+      orders = await OrderModel.find({ orderNumber: `MP-${codeMatch[1].padStart(5, "0")}` }).lean();
+    } else if (isEmail(query)) {
+      orders = await OrderModel.find({ customerEmail: query.toLowerCase() }).sort({ createdAt: -1 }).limit(10).lean();
+    } else {
+      return res.status(400).json({ error: "Escribe tu código de pedido (MP-00012) o el correo con el que compraste" });
+    }
+    res.json(orders.map(trackingView));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** GET /api/orders/track/:token — detalle desde el enlace del correo. */
+export async function trackOrderByToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    const order = await findByToken(req.params.token);
+    if (!order) return res.status(404).json({ error: "No encontramos este pedido" });
+    res.json(trackingView(order));
   } catch (error) {
     next(error);
   }
@@ -268,7 +387,7 @@ export async function createPaymentIntent(req: Request, res: Response, next: Nex
     const order = await findByToken(req.params.token);
     if (!order) return res.status(404).json({ error: "No encontramos este pedido" });
     if (order.source !== "payphone") return res.status(409).json({ error: "Este pedido no se paga con tarjeta" });
-    if (["paid", "processing", "delivered"].includes(order.status)) {
+    if (["paid", "processing", "shipped", "delivered"].includes(order.status)) {
       return res.status(409).json({ error: "Este pedido ya está pagado" });
     }
 
@@ -354,8 +473,14 @@ export async function reviewTransfer(req: AdminRequest, res: Response, next: Nex
     order.set("transfer.reviewedBy", req.admin?.email || "");
     order.set("transfer.reviewedAt", new Date());
     order.set("transfer.note", note);
-    if (decision === "approve" && order.status === "pending") order.status = "paid";
+    const becamePaid = decision === "approve" && order.status === "pending";
+    if (becamePaid) {
+      order.status = "paid";
+      recordStatus(order, "paid", req.admin?.email || "");
+    }
     await order.save();
+    if (becamePaid) notifyStatusChange(order, "paid", req.admin?.email || "");
+    if (decision === "reject") notifyTransferRejected(order, note);
 
     res.json(order);
   } catch (error) {

@@ -10,6 +10,9 @@ import {
   choosePaymentBank,
   listOrders,
   reviewTransfer,
+  trackOrderByToken,
+  trackOrders,
+  updateShipping,
   updateOrderStatus,
   uploadPaymentReceipt,
 } from "../controllers/order.controller";
@@ -37,6 +40,10 @@ router.post("/", createOrder);
 router.get("/", requireAdmin, listOrders);
 router.patch("/:id/status", requireAdmin, updateOrderStatus);
 router.patch("/:id/transfer", requireAdmin, reviewTransfer);
+router.patch("/:id/shipping", requireAdmin, receiptUpload.single("guide"), updateShipping);
+// Seguimiento publico: por codigo MP- o correo, y por el enlace del correo.
+router.get("/track", trackOrders);
+router.get("/track/:token", trackOrderByToken);
 router.get("/payphone/config", getPayphoneConfig);
 router.post("/payphone/confirm", confirmPayphonePayment);
 router.get("/transfer/config", getTransferConfig);

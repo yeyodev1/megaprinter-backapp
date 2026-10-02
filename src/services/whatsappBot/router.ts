@@ -129,6 +129,9 @@ export type ReceiptOutcome =
 export interface OrderSummary {
   id: string;
   orderNumber: string;
+  carrier?: string;
+  trackingNumber?: string;
+  trackingUrl?: string;
   status: string;
   source: string;
   total: number;
@@ -232,7 +235,7 @@ function cardInstructions(order: CreatedOrder) {
     `Paga *${money(order.total)}* con tarjeta en este link seguro de Payphone 🔒👇`,
     order.paymentLink,
     "",
-    "Apenas se apruebe el pago te aviso y coordinamos la entrega 🚚✨",
+    "Cuando termines de pagar, regresa aquí y escríbeme *pagado* ✅ o mándame la captura del pago 📸 y lo confirmo al toque 💙",
   ].join("\n");
 }
 
@@ -241,6 +244,7 @@ const STATUS_TEXT: Record<string, string> = {
   whatsapp: "registrado, un asesor te contacta",
   paid: "pagado ✅",
   processing: "en preparación 📦",
+  shipped: "enviado 🚚",
   delivered: "entregado ✅",
   cancelled: "cancelado",
 };
@@ -255,7 +259,8 @@ export function orderStatusLine(order: OrderSummary) {
           ? "comprobante no válido, envíanos uno nuevo"
           : "esperando el comprobante de transferencia";
   }
-  return `• *${order.orderNumber}* — ${money(order.total)} — ${status}`;
+  const guide = order.status === "shipped" && order.trackingNumber ? ` · guía ${order.carrier ? `${order.carrier} ` : ""}${order.trackingNumber}` : "";
+  return `• *${order.orderNumber}* — ${money(order.total)} — ${status}${guide}${order.trackingUrl ? `\n  ${order.trackingUrl}` : ""}`;
 }
 
 // ─── Helpers de estado ───────────────────────────────────────────────────────
@@ -384,6 +389,40 @@ function showOptions(state: BotState, products: BotProduct[], decision: string, 
   return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}`, decision);
 }
 
+/** Respuesta segun lo que dijo Payphone del pago con tarjeta ("pagado" o captura del pago). */
+function cardCheckReply(state: BotState, check: CardCheck): TurnResult {
+  const extra = { intent: "consultar_pedido" as const, orderNumber: check.orderNumber, paymentMethod: "card" as const, total: check.total };
+  if (check.outcome === "paid_now" || check.outcome === "already_paid") {
+    return reply(
+      state,
+      `Listo! ✅ Tu pago de *${money(check.total)}* del pedido *${check.orderNumber}* está confirmado 💙 Te llega la confirmación a tu correo y el equipo te escribe para coordinar la entrega 🚚✨`,
+      check.outcome === "paid_now" ? "R3:pago_confirmado" : "R3:pago_ya_confirmado",
+      extra,
+    );
+  }
+  if (check.outcome === "rejected") {
+    return reply(
+      state,
+      `Uy, el pago del pedido *${check.orderNumber}* salió rechazado 😕 Puedes intentarlo otra vez con otra tarjeta aquí 👇\n${check.paymentLink}\n\nSi prefieres, también puedes pagar por *transferencia* 🏦`,
+      "R3:pago_rechazado",
+      extra,
+    );
+  }
+  if (check.outcome === "mismatch") {
+    return reply(state, `Recibimos un pago para el pedido *${check.orderNumber}*, pero el monto no coincide 🤔 Te paso con una persona del equipo para revisarlo 🙌`, "R3:pago_monto_distinto", {
+      ...extra,
+      intent: "dudas",
+      route: "human",
+    });
+  }
+  return reply(
+    state,
+    `Todavía no me aparece el pago del pedido *${check.orderNumber}* 🤔 Si ya lo hiciste, dame un minutito y escríbeme *pagado* otra vez. Si aún no, aquí tienes tu link seguro 👇\n${check.paymentLink}`,
+    check.outcome === "error" ? "R3:pago_error_verificando" : "R3:pago_pendiente",
+    extra,
+  );
+}
+
 // ─── Turno ───────────────────────────────────────────────────────────────────
 
 export async function handleTurn(previous: BotState, input: TurnInput, deps: BotDeps): Promise<TurnResult> {
@@ -441,6 +480,9 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
       return reply(state, AUDIO_REPLY, "R1:audio");
     }
     if (outcome.status === "no_order") {
+      // Captura del pago con tarjeta: se verifica con Payphone como un "pagado".
+      const check = await deps.checkCardPayment(state.orderId);
+      if (check) return cardCheckReply(state, check);
       return reply(
         state,
         "Recibí tu archivo 📎 pero no encuentro un pedido pendiente de transferencia con este número. Si hiciste el pedido por la web, escríbeme tu número de pedido (empieza con *MP-*).",
@@ -489,38 +531,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   // R3: "pagado" con un pedido de tarjeta: se verifica con Payphone y se confirma.
   if (claimsPaid(message) && state.paymentMethod !== "transfer") {
     const check = await deps.checkCardPayment(state.orderId);
-    if (check) {
-      const extra = { intent: "consultar_pedido" as const, orderNumber: check.orderNumber, paymentMethod: "card" as const, total: check.total };
-      if (check.outcome === "paid_now" || check.outcome === "already_paid") {
-        return reply(
-          state,
-          `Listo! ✅ Tu pago de *${money(check.total)}* del pedido *${check.orderNumber}* está confirmado 💙 El equipo te escribe para coordinar la entrega 🚚✨`,
-          check.outcome === "paid_now" ? "R3:pago_confirmado" : "R3:pago_ya_confirmado",
-          extra,
-        );
-      }
-      if (check.outcome === "rejected") {
-        return reply(
-          state,
-          `Uy, el pago del pedido *${check.orderNumber}* salió rechazado 😕 Puedes intentarlo otra vez con otra tarjeta aquí 👇\n${check.paymentLink}\n\nSi prefieres, también puedes pagar por *transferencia* 🏦`,
-          "R3:pago_rechazado",
-          extra,
-        );
-      }
-      if (check.outcome === "mismatch") {
-        return reply(state, `Recibimos un pago para el pedido *${check.orderNumber}*, pero el monto no coincide 🤔 Te paso con una persona del equipo para revisarlo 🙌`, "R3:pago_monto_distinto", {
-          ...extra,
-          intent: "dudas",
-          route: "human",
-        });
-      }
-      return reply(
-        state,
-        `Todavía no me aparece el pago del pedido *${check.orderNumber}* 🤔 Si ya lo hiciste, dame un minutito y escríbeme *pagado* otra vez. Si aún no, aquí tienes tu link seguro 👇\n${check.paymentLink}`,
-        check.outcome === "error" ? "R3:pago_error_verificando" : "R3:pago_pendiente",
-        extra,
-      );
-    }
+    if (check) return cardCheckReply(state, check);
   }
 
   // R3: consultar pedidos (o "ya transferí" con el pedido abierto).

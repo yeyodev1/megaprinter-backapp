@@ -349,6 +349,20 @@ async function main() {
     assert.equal(results[4].state.customerName, "Lucía Vega");
   });
 
+  await test("link de tarjeta pide volver con 'pagado' y la captura del pago se verifica", async () => {
+    const created = (await conversation(fakeDeps({ bank: false }), ["monitor", "1", "Eva Ruiz", "eva@mail.com", "retiro", "si"])).at(-1)!;
+    assert.match(created.reply, /regresa aquí y escríbeme \*pagado\*[\s\S]*captura del pago/);
+    const check: CardCheck = { outcome: "paid_now", orderNumber: "MP-00030", total: 90, paymentLink: "https://megaprinter.ec/pagar/t" };
+    const screenshot = (await conversation(fakeDeps({ receipt: { status: "no_order" }, cardCheck: check }), [{ media: "https://x/captura.png" }]))[0];
+    assert.equal(screenshot.decision, "R3:pago_confirmado");
+  });
+
+  await test("'mi pedido' muestra enviado con guía y el link de seguimiento", async () => {
+    const orders: OrderSummary[] = [{ id: "s", orderNumber: "MP-00031", status: "shipped", source: "payphone", total: 90, transferStatus: "", paymentLink: "", carrier: "Servientrega", trackingNumber: "SV123", trackingUrl: "https://megaprinter.ec/pedido/t", createdAt: new Date() }];
+    const result = (await conversation(fakeDeps({ orders }), ["estado de mi pedido"]))[0];
+    assert.match(result.reply, /enviado 🚚 · guía Servientrega SV123[\s\S]*megaprinter\.ec\/pedido\/t/);
+  });
+
   await test("pedir asesor deriva con intencion dudas", async () => {
     const result = (await conversation(fakeDeps(), ["quiero hablar con un asesor"]))[0];
     assert.equal(result.intent, "dudas");

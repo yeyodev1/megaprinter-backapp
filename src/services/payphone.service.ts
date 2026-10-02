@@ -1,4 +1,5 @@
 import axios from "axios";
+import { notifyStatusChange, recordStatus } from "./orderNotifications.service";
 
 /**
  * Pagos con tarjeta (Payphone): confirmar una transaccion y consultar su estado.
@@ -79,16 +80,21 @@ export async function applyPayphoneResult(order: any, data: any, clientTxId: str
     await order.save();
     return "mismatch";
   }
-  order.status = approved ? "paid" : "cancelled";
+  const newStatus = approved ? "paid" : "cancelled";
+  const changed = order.status !== newStatus;
+  order.status = newStatus;
   order.clientTransactionId = clientTxId;
   if (data?.transactionId) order.payphoneTransactionId = Number(data.transactionId);
+  if (changed && approved) recordStatus(order, "paid", "Payphone");
   await order.save();
+  // Pago aprobado: correo al cliente y aviso al equipo para preparar el pedido.
+  if (changed && approved) notifyStatusChange(order, "paid", "Payphone");
   return approved ? "approved" : "rejected";
 }
 
 export type CardSettlement = "already_paid" | "paid_now" | "pending" | "rejected" | "mismatch" | "not_applicable" | "error";
 
-const PAID = ["paid", "processing", "delivered"];
+const PAID = ["paid", "processing", "shipped", "delivered"];
 
 /** Intentos de pago del pedido, del mas reciente al mas viejo, sin repetidos. */
 export const paymentAttempts = (order: any): string[] =>

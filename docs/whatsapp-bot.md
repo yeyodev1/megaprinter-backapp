@@ -181,6 +181,23 @@ Endpoints extra disponibles: `/search-order`, `/media` (alias `/transfer-receipt
 
 Simulación de 25 compras completas: `docs/simulacion-25-compras.md`.
 
+## Correos y seguimiento del pedido
+
+| Momento | Cliente | Equipo (team@megaprinter.ec + EMAIL_TO) |
+|---|---|---|
+| Pedido creado (web o bot) | "Recibimos tu pedido" + link de pago o cuenta bancaria | "Nuevo pedido" |
+| Pago confirmado (Payphone o transferencia aprobada) | "Pago confirmado" | "Pago confirmado: prepara el pedido" |
+| En preparación / Enviado (con guía) / Entregado / Cancelado | Un correo por etapa | — |
+| Comprobante rechazado | Motivo + link para subir otro | — |
+
+- **Guía de envío:** en el detalle del pedido (panel) se carga transportista, número y archivo.
+  Guardarla pasa el pedido a **Enviado** y le manda la guía al cliente.
+- **Seguimiento público:** `megaprinter.ec/pedido` (busca por código MP- o correo) y
+  `megaprinter.ec/pedido/<token>` (enlace de los correos). No muestra correo, teléfono ni dirección.
+- **Remitente:** sin `EMAIL_FROM` los correos salen de `onboarding@resend.dev`, que solo entrega al
+  dueño de la cuenta de Resend. Para llegar a clientes: verificar el dominio `megaprinter.ec` en Resend y
+  poner `EMAIL_FROM="Megaprinter <pedidos@megaprinter.ec>"` en Vercel.
+
 ## Pruebas
 
 ```bash

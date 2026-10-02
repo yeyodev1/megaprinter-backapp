@@ -3,7 +3,7 @@ import { Request, Response } from "express";
 import { OrderModel } from "../models/order.model";
 import { ProductModel } from "../models/product.model";
 import { WhatsAppSessionModel } from "../models/whatsappSession.model";
-import { notifyNewOrder } from "../services/email.service";
+import { notifyOrderCreated } from "../services/orderNotifications.service";
 import { geminiEnabled } from "../services/gemini.service";
 import { settleCardPayment } from "../services/payphone.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
@@ -255,7 +255,7 @@ async function createBotOrder(phone: string, state: BotState): Promise<CreatedOr
       : {}),
   });
 
-  void notifyNewOrder(order, "WhatsApp (bot)");
+  notifyOrderCreated(order, "WhatsApp (bot)");
 
   return {
     orderId: String(order._id),
@@ -369,6 +369,9 @@ async function findOrders(phone: string, orderNumber?: string): Promise<OrderSum
     total: order.totalAmount,
     transferStatus: order.transfer?.status || "",
     paymentLink: order.source === "payphone" && order.status === "pending" && order.paymentToken ? `${storeUrl()}/pagar/${order.paymentToken}` : "",
+    carrier: order.shipping?.carrier || "",
+    trackingNumber: order.shipping?.trackingNumber || "",
+    trackingUrl: order.paymentToken ? `${storeUrl()}/pedido/${order.paymentToken}` : "",
     createdAt: order.createdAt,
   }));
 }

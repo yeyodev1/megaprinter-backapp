@@ -440,6 +440,14 @@ function cardCheckReply(state: BotState, check: CardCheck): TurnResult {
 
 // ─── Tickets de servicio tecnico y suministros ──────────────────────────────
 
+const ISSUE_EXAMPLES: Record<string, string> = {
+  impresora: "no imprime, sale con rayas, se atasca el papel",
+  laptop: "no enciende, está lenta, se calienta",
+  pc: "no enciende, está lenta, tiene virus",
+  monitor: "no da imagen, tiene líneas",
+  camara: "no graba, no se ve en el celular",
+};
+
 const TICKET_STAGES: Stage[] = ["ticket_name", "ticket_device", "ticket_issue", "ticket_confirm"];
 const isTicketStage = (stage: Stage) => TICKET_STAGES.includes(stage);
 
@@ -510,7 +518,7 @@ async function askTicketNext(state: BotState, deps: BotDeps, decision: string, p
       join(
         state.ticket.type === "suministros"
           ? "Qué suministro necesitas? 🧴 Cuéntame la marca y el modelo de tu impresora y qué buscas (tinta, tóner, cartucho, papel)"
-          : `Cuéntame más o menos qué problema tiene tu ${deviceLabel(state.ticket.device).toLowerCase()} 📝 (por ejemplo: no imprime, no enciende, está lenta)`,
+          : `Cuéntame más o menos qué problema tiene tu ${deviceLabel(state.ticket.device).toLowerCase()} 📝 (por ejemplo: ${ISSUE_EXAMPLES[state.ticket.device] || "no enciende, falla al usarlo"})`,
       ),
       decision,
     );

@@ -698,16 +698,13 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
 // ─── Decision del flujo principal (/brain) ───────────────────────────────────
 
 /** Rutas que decide /brain: a que flujo de BuilderBot va el mensaje. */
-export const DECISIONS = [
-  "conversation",
-  "catalog",
-  "checkoutCard",
-  "checkoutTransfer",
-  "checkoutAdvisor",
-  "searchOrder",
-  "media",
-  "human",
-] as const;
+/**
+ * Rutas que decide /brain: una por flujo de BuilderBot (6 flujos: Principal,
+ * Conversacion, Catalogo, Checkout tarjeta, Checkout transferencia, Asesor humano).
+ * Todos los endpoints procesan el turno completo, asi que pedidos, consultas y
+ * fotos se atienden bien aunque no tengan un flujo propio.
+ */
+export const DECISIONS = ["conversation", "catalog", "checkoutCard", "checkoutTransfer", "human"] as const;
 export type Decision = (typeof DECISIONS)[number];
 
 /**
@@ -724,16 +721,17 @@ export function decideRoute(
   const state = { ...createInitialState(), ...(previous || {}) };
   const message = input.message.trim();
 
-  if (input.mediaUrl || (input.mediaEvent && !message)) return { route: "media", reason: "archivo adjunto" };
+  // Fotos: al flujo de transferencia, que en BuilderBot tiene el evento IMAGEN O VIDEO.
+  if (input.mediaUrl || (input.mediaEvent && !message)) return { route: "checkoutTransfer", reason: "archivo adjunto" };
   if (!message) return { route: "conversation", reason: "mensaje vacio" };
   // "hablo con una persona?" es una pregunta (se responde que es un bot), no un pedido de asesor.
   if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
-  if (wantsTracking(message) || orderNumberIn(message)) return { route: "searchOrder", reason: "consulta de pedido" };
+  if (wantsTracking(message) || orderNumberIn(message)) return { route: "conversation", reason: "consulta de pedido" };
   if (state.stage === "confirm" && isYes(message)) {
     if (state.paymentMethod === "transfer" && options.bank) return { route: "checkoutTransfer", reason: "confirma pedido por transferencia" };
     if (state.paymentMethod === "card" && options.cardEnabled) return { route: "checkoutCard", reason: "confirma pedido con tarjeta" };
-    return { route: "checkoutAdvisor", reason: "confirma pedido sin metodo de pago" };
+    return { route: "conversation", reason: "confirma pedido sin metodo de pago" };
   }
   if (wantsCatalog(message) && state.stage !== "choosing") return { route: "catalog", reason: "pide el catalogo" };
   return { route: "conversation", reason: "conversacion" };

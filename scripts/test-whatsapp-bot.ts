@@ -397,18 +397,30 @@ async function main() {
     assert.equal(result.state.options[0].productId, "p2");
   });
 
+  await test("/brain solo devuelve las 5 rutas que tienen flujo en BuilderBot", () => {
+    const messages = ["hola", "catálogo", "asesor", "mi pedido", "MP-12", "eres un bot?", "hazme la tarea", ""];
+    for (const message of messages) {
+      for (const stage of ["idle", "confirm", "ordered"] as const) {
+        for (const paymentMethod of ["card", "transfer", null] as const) {
+          const route = decideRoute({ ...createInitialState(), stage, paymentMethod }, { message, mediaUrl: message ? undefined : "https://x/f.jpg" }, { bank: false, cardEnabled: false }).route;
+          assert.ok(["conversation", "catalog", "checkoutCard", "checkoutTransfer", "human"].includes(route), `${message} → ${route}`);
+        }
+      }
+    }
+  });
+
   await test("/brain decide la ruta sin tocar el pedido", () => {
     const on = { bank: true, cardEnabled: true };
     const confirmCard = { ...createInitialState(), stage: "confirm" as const, paymentMethod: "card" as const, cart: [{ productId: "p1", name: "HP", price: 649, quantity: 1 }] };
     assert.equal(decideRoute(null, { message: "hola" }, on).route, "conversation");
     assert.equal(decideRoute(null, { message: "quiero ver el catálogo" }, on).route, "catalog");
     assert.equal(decideRoute(null, { message: "quiero hablar con un asesor" }, on).route, "human");
-    assert.equal(decideRoute(null, { message: "cuál es el estado de mi pedido" }, on).route, "searchOrder");
-    assert.equal(decideRoute(null, { message: "", mediaUrl: "https://x/y.jpg" }, on).route, "media");
-    assert.equal(decideRoute(null, { message: "", mediaEvent: true }, on).route, "media");
+    assert.equal(decideRoute(null, { message: "cuál es el estado de mi pedido" }, on).route, "conversation");
+    assert.equal(decideRoute(null, { message: "", mediaUrl: "https://x/y.jpg" }, on).route, "checkoutTransfer");
+    assert.equal(decideRoute(null, { message: "", mediaEvent: true }, on).route, "checkoutTransfer");
     assert.equal(decideRoute(confirmCard, { message: "sí" }, on).route, "checkoutCard");
     assert.equal(decideRoute({ ...confirmCard, paymentMethod: "transfer" }, { message: "dale" }, on).route, "checkoutTransfer");
-    assert.equal(decideRoute({ ...confirmCard, paymentMethod: "transfer" }, { message: "si" }, { bank: false, cardEnabled: true }).route, "checkoutAdvisor");
+    assert.equal(decideRoute({ ...confirmCard, paymentMethod: "transfer" }, { message: "si" }, { bank: false, cardEnabled: true }).route, "conversation");
     assert.equal(decideRoute(confirmCard, { message: "no, cambia el correo" }, on).route, "conversation");
     const before = JSON.stringify(confirmCard);
     decideRoute(confirmCard, { message: "sí" }, on);

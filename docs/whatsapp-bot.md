@@ -116,66 +116,38 @@ Todas responden **HTTP 200** siempre (un 4xx/5xx deja al cliente sin respuesta).
 Las Rules de BuilderBot van por **`route`** (ver "Flujos"). `decision` es solo para depurar
 (qué regla respondió). `intencion` se mantiene por compatibilidad con Boloncity.
 
-## Flujos en BuilderBot
+## Flujos en BuilderBot (6 flujos)
 
-**`/brain` solo decide** a qué flujo va el mensaje (`route`). No responde al cliente ni toca el
-pedido ("Enviar al cliente" APAGADO). Cada flujo destino llama a su endpoint, que procesa el
-mensaje completo (saca los datos, arma el carrito, crea el pedido) y responde en `{message}`.
+**`/brain` solo decide** a qué flujo va el mensaje (`route`); no responde ni toca el pedido. Cada
+flujo destino llama a su endpoint, que procesa el mensaje completo y responde en `{message}`.
+Todos los endpoints procesan el turno completo: consultas de pedido, pedidos sin método de pago y
+fotos se atienden bien aunque no tengan un flujo propio.
 
-Base: `https://megaprinter-backapp.vercel.app/api/orders/whatsapp-bot`.
-Todos los nodos HTTP: `POST`, header `Content-Type: application/json`, Body con campos (RAW apagado),
+Todos los nodos HTTP: `POST`, `Content-Type: application/json`, Body con campos (RAW apagado):
 `rawMessage = {body}`, `phone = {from}`, `history = {history}`, `urlTempFile = {urlTempFile}`.
+Base: `https://megaprinter-backapp.vercel.app/api/orders/whatsapp-bot`.
 
-### Archivos (`/media`)
-La IA mira cada foto antes de decidir:
-- **Comprobante** + pedido por transferencia pendiente → se guarda en el pedido (por revisar en el panel).
-- **Comprobante** sin pedido → le pide su número MP-.
-- **Foto o captura (incluso de Instagram) de un producto** → la cruza con el catálogo: "¡Sí lo tenemos!",
-  "estos son los más parecidos" o "no lo tenemos, un asesor te cotiza si lo conseguimos".
-- **Otra imagen** → no se guarda como pago; si tiene una transferencia pendiente se lo recuerda.
-- **Videos y audios** → no se procesan: pide una foto o captura de lo que busca.
+| Flujo | Evento | Endpoint | Enviar al cliente | Después |
+|---|---|---|---|---|
+| 🧠 Principal | GENERAL | `/brain` | **APAGADO** | Rules por `route` (abajo) |
+| 💬 Conversación | ACCIÓN | `/conversation` | `{message}` | Sin Rules |
+| 📚 Catálogo | ACCIÓN | `/catalog` | `{message}` | Sin Rules |
+| 💳 Checkout tarjeta | ACCIÓN | `/checkout` | `{message}` | Sin Rules |
+| 🏦 Checkout transferencia | IMAGEN O VÍDEO | `/checkout` | `{message}` | Sin Rules (también recibe fotos y comprobantes) |
+| 🙋 Asesor humano | ACCIÓN | `/human` | `{message}` | Paso Silenciar (60 min) |
 
-### Flujo Principal (evento GENERAL) → `/brain`, Enviar al cliente APAGADO
+Rules de 🧠 Principal:
 
-| `route` | Cuándo | Flujo destino | Endpoint del destino |
-|---|---|---|---|
-| `conversation` | Todo lo demás: saluda, busca, elige, da sus datos, pregunta | Conversación | `/conversation` |
-| `catalog` | Pide el catálogo | Catálogo | `/catalog` |
-| `checkoutCard` | Dice "sí" al resumen y eligió tarjeta | Checkout tarjeta | `/checkout` |
-| `checkoutTransfer` | Dice "sí" al resumen y eligió transferencia | Checkout transferencia | `/checkout` |
-| `checkoutAdvisor` | Dice "sí" pero no hay método de pago activo | Checkout asesor | `/checkout` |
-| `searchOrder` | Pregunta por su pedido, "ya transferí" o escribe un MP- | Consultar pedido | `/search-order` |
-| `human` | Pide un asesor, reclamo o garantía | Asesor humano | `/human` |
-| `media` | Llega foto, PDF, video o audio | Imágenes y comprobantes | `/media` |
-
-### Flujos destino → Enviar al cliente ENCENDIDO con `{message}`
-
-Todos llevan las **mismas Rules por `route`** (lo que respondió el endpoint):
-
-| `route` de la respuesta | Ir a |
-|---|---|
-| `checkoutTransfer` o `awaitingReceipt` | Esperar comprobante |
-| `human` o `checkoutAdvisor` | Silenciar bot |
-| cualquier otra | Fin (sin Rule): el siguiente mensaje vuelve al Principal |
-
-Excepciones: **Asesor humano** no lleva Rules (después del HTTP va el paso Silenciar), y
-**Esperar comprobante** no lleva Rule hacia sí mismo.
-
-| Flujo | Endpoint | Después del HTTP |
+| `route` | Va a | Cuándo |
 |---|---|---|
-| Conversación | `/conversation` | Rules comunes |
-| Catálogo | `/catalog` | Rules comunes (opcional: enviar PDF del catálogo) |
-| Checkout tarjeta | `/checkout` | Rules comunes (el link ya va en el mensaje) |
-| Checkout transferencia | `/checkout` | Rules comunes → Esperar comprobante |
-| Checkout asesor | `/checkout` | Rules comunes → Silenciar bot |
-| Consultar pedido | `/search-order` | Rules comunes ("ya transferí" → Esperar comprobante) |
-| Asesor humano | `/human` | Paso Silenciar (60 min) |
-| Esperar comprobante | paso esperar respuesta → `/media` | Rule `human` → Silenciar bot |
-| Imágenes y comprobantes (evento MEDIA/DOCUMENTO) | `/media` | Sin Rules |
-| Silenciar bot | — | Solo el paso Silenciar (sin HTTP ni texto) |
+| `conversation` | 💬 Conversación | Charla, búsqueda, datos, consultas de pedido, "eres un bot?" |
+| `catalog` | 📚 Catálogo | Pide el catálogo |
+| `checkoutCard` | 💳 Checkout tarjeta | "sí" al resumen con tarjeta |
+| `checkoutTransfer` | 🏦 Checkout transferencia | "sí" al resumen con transferencia, o llega una foto |
+| `human` | 🙋 Asesor humano | Pide un asesor, reclamo o garantía |
 
-Nunca una Rule hacia el mismo flujo (bucle). `/brain` y los destinos usan los mismos detectores:
-si alguna vez la decisión no coincide, el destino igual responde bien porque procesa el turno completo.
+Nunca una Rule hacia el mismo flujo (bucle). Los flujos destino no llevan Rules.
+Endpoints extra disponibles: `/search-order`, `/media` (alias `/transfer-receipt`).
 
 ## Variables de entorno
 

@@ -161,6 +161,26 @@ Endpoints extra disponibles: `/search-order`, `/media` (alias `/transfer-receipt
 | `BOT_TEST_PHONE` | Solo fuera de producción: fija el teléfono (pruebas por Telegram/Postman). |
 | Ya existentes | `PAYPHONE_TOKEN`, `PAYPHONE_STORE_ID`, `CLOUDINARY_*`, `RESEND_API_KEY`, `EMAIL_TO`. |
 
+## Logs (qué pasa en cada mensaje)
+
+- **Panel:** `megaprinter.ec/admin/bot` (en vivo).
+- **Terminal:** `pnpm bot:logs` (últimos 60 pasos), `pnpm bot:logs -- 0991234567` (un número),
+  `pnpm bot:logs -- --errors`. Lee la bitácora de Mongo (30 días).
+- **Vercel:** cada mensaje deja una línea `[bot]` con teléfono, decisión de `/brain`, flujo, regla,
+  tiempo, lo que escribió el cliente y lo que respondió Mila.
+
+## Pagos con tarjeta: link, pago y "pagado"
+
+1. Al confirmar, Mila manda `megaprinter.ec/pagar/<token>`. Cada vez que se abre se crea un intento
+   nuevo; los anteriores se guardan (`clientTransactionIds`).
+2. Si el cliente vuelve a la web después de pagar, `/pay-response` confirma y el pedido queda Pagado.
+3. Si cierra la pestaña y escribe **"pagado"** / "ya pagué", el bot consulta a Payphone cada intento,
+   hace la confirmación obligatoria (sin ella Payphone revierte la venta a los 5 min) y el pedido
+   queda Pagado. Si aún no aparece, no toca nada y le reenvía el link. Rechazado: link para reintentar.
+   Monto distinto: pasa a una persona. Un segundo "pagado" responde "ya está confirmado" sin volver a cobrar.
+
+Simulación de 25 compras completas: `docs/simulacion-25-compras.md`.
+
 ## Pruebas
 
 ```bash

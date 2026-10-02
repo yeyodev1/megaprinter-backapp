@@ -25,7 +25,7 @@ export const normalize = (text: string) =>
     .trim();
 
 const STOPWORDS = new Set(
-  "a al algo alguna alguno buen buena busco con cual cuanto cuesta de del el en es esa ese esta este hay la las lo los me mas necesito para por precio que quiero se si su tiene tienen tienes un una uno unos y o porfa favor hola gracias dame quisiera".split(" "),
+  "a al algo alguna alguno buen buena busco con cual cuanto cuesta de del el en es esa ese esta este hay la las lo los me mas necesito para por precio que quiero se si su tiene tienen tienes un una uno unos y o porfa favor hola gracias dame quisiera tambien otra otro otras otros agrega agregame agregar anade anademe sumale ponme".split(" "),
 );
 
 /** Sinonimos frecuentes en Ecuador -> palabra que aparece en el catalogo. */

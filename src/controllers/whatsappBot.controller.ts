@@ -5,8 +5,10 @@ import { ProductModel } from "../models/product.model";
 import { WhatsAppSessionModel } from "../models/whatsappSession.model";
 import { notifyNewOrder } from "../services/email.service";
 import { geminiEnabled } from "../services/gemini.service";
+import { settleCardPayment } from "../services/payphone.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
 import { naturalize } from "../services/whatsappBot/voice";
+import { claimsPaid } from "../services/whatsappBot/intents";
 import {
   activeBankAccounts,
   attachReceipt,
@@ -21,6 +23,7 @@ import { aiExtract, heuristicExtract } from "../services/whatsappBot/extractor";
 import {
   BotDeps,
   BotState,
+  CardCheck,
   CreatedOrder,
   FALLBACK_MESSAGE,
   OrderSummary,
@@ -330,6 +333,26 @@ async function receiveMedia(phone: string, orderId: string, mediaUrl: string): P
   }
 }
 
+/** "pagado": verifica con Payphone el pedido de tarjeta del chat o el ultimo pendiente del telefono. */
+async function checkCardPayment(phone: string, orderId: string): Promise<CardCheck | null> {
+  const variants = phoneVariants(phone);
+  const card = { source: "payphone" };
+  const order: any =
+    (orderId && (await OrderModel.findOne({ _id: orderId, ...card }))) ||
+    (variants.length
+      ? await OrderModel.findOne({ ...card, status: { $in: ["pending", "cancelled", "paid"] }, $or: [{ whatsappPhone: { $in: variants } }, { customerPhone: { $in: variants } }] }).sort({ createdAt: -1 })
+      : null);
+  if (!order) return null;
+  const outcome = await settleCardPayment(order);
+  if (outcome === "not_applicable") return null;
+  return {
+    outcome,
+    orderNumber: order.orderNumber || String(order._id),
+    total: order.totalAmount,
+    paymentLink: `${storeUrl()}/pagar/${order.paymentToken}`,
+  };
+}
+
 async function findOrders(phone: string, orderNumber?: string): Promise<OrderSummary[]> {
   const filter = orderNumber
     ? { orderNumber }
@@ -357,6 +380,7 @@ async function buildDeps(phone: string): Promise<BotDeps> {
     createOrder: (state) => createBotOrder(phone, state),
     receiveReceipt: (orderId, mediaUrl) => receiveMedia(phone, orderId, mediaUrl),
     findOrders: (orderNumber) => findOrders(phone, orderNumber),
+    checkCardPayment: (orderId) => checkCardPayment(phone, orderId),
     banks: await activeBankAccounts(),
     cardEnabled: cardEnabled(),
     supportPhone: SUPPORT_PHONE(),
@@ -426,7 +450,9 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
     // (o mientras se procesaba) recibe la misma respuesta y no crea otra orden.
     const hash = turnHash(message, mediaUrl);
     const lastAt = session.lastMessageAt ? new Date(session.lastMessageAt).getTime() : 0;
-    if (session.lastResponse && session.lastMessageHash === hash && (arrivedAt <= lastAt || arrivedAt - lastAt < RETRY_WINDOW_MS)) {
+    // Excepcion: "pagado" siempre se vuelve a verificar con Payphone (el pago pudo
+    // aprobarse entre un mensaje y otro; verificar dos veces nunca cobra dos veces).
+    if (session.lastResponse && session.lastMessageHash === hash && !claimsPaid(message) && (arrivedAt <= lastAt || arrivedAt - lastAt < RETRY_WINDOW_MS)) {
       await WhatsAppSessionModel.updateOne({ phone }, { $set: { turnLockUntil: null } });
       released = true;
       return { ...(session.lastResponse as TurnResult), decision: "R0:duplicado", duplicated: true };
@@ -480,7 +506,6 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
       },
     );
     released = true;
-    console.log(`[whatsapp-bot] ${phone} ${result.decision} → paso ${result.step}`);
     return result;
   } finally {
     if (!released) await WhatsAppSessionModel.updateOne({ phone }, { $set: { turnLockUntil: null } }).catch(() => {});
@@ -522,6 +547,12 @@ function toBotResponse(result: TurnResult | null) {
   };
 }
 
+/** Texto en una linea y corto, para que cada mensaje sea una sola linea en los logs de Vercel. */
+const oneLine = (text: string, max = 220) => {
+  const flat = String(text || "").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+};
+
 const input = (req: Request) => ({ ...(req.query || {}), ...(req.body || {}) });
 
 /**
@@ -544,7 +575,7 @@ export async function whatsappBotDecide(req: Request, res: Response) {
       bank: (await activeBankAccounts()).length > 0,
       cardEnabled: cardEnabled(),
     });
-    console.log(`[whatsapp-bot] ${phone} decide → ${route} (${reason})`);
+    console.log(`[bot] ${phone} 🧠 /brain → ${route} (${reason}) ${Date.now() - startedAt}ms | 👤 ${oneLine(message || (mediaUrl ? "[archivo]" : ""))}`);
     logBotEvent({
       phone,
       endpoint: "brain",
@@ -586,6 +617,9 @@ export async function whatsappBotTurn(req: Request, res: Response) {
   try {
     const result = await runTurn(body);
     if (result) {
+      console.log(
+        `[bot] ${phone} /${endpoint} → ${result.route} ${result.decision} paso=${result.step}${result.orderNumber ? ` ${result.orderNumber}` : ""} ${Date.now() - startedAt}ms | 👤 ${oneLine(message)} | 🤖 ${oneLine(result.reply)}`,
+      );
       logBotEvent({
         phone,
         endpoint,
@@ -604,7 +638,7 @@ export async function whatsappBotTurn(req: Request, res: Response) {
     }
     res.json(toBotResponse(result));
   } catch (error) {
-    console.error("[whatsapp-bot] error en el turno:", error);
+    console.error(`[bot] ${phone} /${endpoint} ❌ ERROR | 👤 ${oneLine(message)} |`, error);
     logBotEvent({
       phone,
       endpoint,

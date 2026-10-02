@@ -67,3 +67,7 @@ export const wantsOptOut = (text: string) =>
 /** "eres un bot?", "hablo con una persona?", "eres real?": se responde con la verdad (soy un bot). */
 export const asksIfBot = (text: string) =>
   has(text, /\b(eres (un |una )?(bot|robot|ia|inteligencia artificial|maquina|persona|humano|humana|real)|(hablo|estoy hablando) con (un |una )?(bot|robot|maquina|persona|humano|humana|ia)|es (un )?(bot|automatico)|sos (un )?bot)\b/);
+
+/** "pagado", "ya pagué", "listo, pagué", "ya hice el pago": dice que ya pagó. */
+export const claimsPaid = (text: string) =>
+  has(text, /\b(pagado|ya pague|ya pagamos|listo pague|ya hice el pago|ya realice el pago|ya cancele|pago hecho|ya esta pagado|acabo de pagar)\b/);

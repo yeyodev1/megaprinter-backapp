@@ -1,12 +1,10 @@
 import { Request, Response, NextFunction } from "express";
-import axios from "axios";
+import { PAYPHONE_APPROVED, applyPayphoneResult, confirmPayphoneTransaction } from "../services/payphone.service";
 import { ORDER_SOURCES, ORDER_STATUSES, OrderModel, OrderSource, OrderStatus } from "../models/order.model";
 import { AdminRequest } from "../middlewares/admin.middleware";
 import { notifyNewOrder } from "../services/email.service";
 import { activeBankAccounts, allBankAccounts, attachReceipt, isAcceptedReceipt, transferEnabled } from "../services/transfer.service";
 
-const PAYPHONE_CONFIRM_URL = "https://paymentbox.payphonetodoesposible.com/api/confirm";
-const PAYPHONE_APPROVED = 3;
 
 interface IncomingItem {
   name: string;
@@ -61,25 +59,24 @@ export function getPayphoneConfig(_req: Request, res: Response) {
 
 export async function confirmPayphonePayment(req: Request, res: Response, next: NextFunction) {
   const { id, clientTransactionId } = req.body ?? {};
-  const token = process.env.PAYPHONE_TOKEN;
 
   if (!id || !clientTransactionId) {
     return res.status(400).json({ error: "Faltan datos de confirmación de Payphone" });
   }
-  if (!token) {
+  if (!process.env.PAYPHONE_TOKEN) {
     return res.status(503).json({ error: "Payphone no está configurado" });
   }
 
   try {
-    const order = await OrderModel.findOne({ clientTransactionId });
+    // Tambien por intentos anteriores: el cliente pudo pagar en un link viejo.
+    const order = await OrderModel.findOne({ $or: [{ clientTransactionId }, { clientTransactionIds: clientTransactionId }] });
     if (!order) {
       return res.status(404).json({ error: "No encontramos el pedido de esa transacción" });
     }
 
-    // Idempotencia: Payphone puede reintentar el retorno y el usuario puede
-    // recargar la pagina de confirmacion. Sin esto se volvia a llamar a la API
-    // externa en cada recarga.
-    if (order.status === "paid") {
+    // Idempotencia: Payphone puede reintentar el retorno, el cliente recargar la
+    // pagina o el bot haber confirmado antes cuando escribio "pagado".
+    if (["paid", "processing", "delivered"].includes(order.status)) {
       return res.json({
         statusCode: PAYPHONE_APPROVED,
         transactionStatus: "Approved",
@@ -87,39 +84,13 @@ export async function confirmPayphonePayment(req: Request, res: Response, next: 
       });
     }
 
-    const { data } = await axios.post(
-      PAYPHONE_CONFIRM_URL,
-      { id: Number(id), clientTxId: clientTransactionId },
-      {
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        timeout: 20000,
-      },
-    );
-
-    const approved = data?.statusCode === PAYPHONE_APPROVED;
-
-    // Payphone devuelve el monto en centavos. Se compara con lo que realmente
-    // se guardo del pedido: sin esta verificacion una transaccion de $1 podia
-    // marcar como pagada una orden de $1000.
-    const confirmedAmount = Number(data?.amount);
-    const expectedAmount = Math.round(order.totalAmount * 100);
-    const amountMatches =
-      !Number.isFinite(confirmedAmount) || confirmedAmount === expectedAmount;
-
-    if (approved && !amountMatches) {
-      order.status = "pending";
-      await order.save();
-      console.error(
-        `[payphone] monto no coincide para ${clientTransactionId}: esperado ${expectedAmount}, recibido ${confirmedAmount}`,
-      );
+    const data = await confirmPayphoneTransaction(Number(id), clientTransactionId);
+    const result = await applyPayphoneResult(order, data, clientTransactionId);
+    if (result === "mismatch") {
       return res.status(409).json({
         error: "El monto confirmado no coincide con el pedido. Contáctanos para revisarlo.",
       });
     }
-
-    order.status = approved ? "paid" : "cancelled";
-    order.payphoneTransactionId = data?.transactionId;
-    await order.save();
 
     return res.json(data);
   } catch (error) {
@@ -301,6 +272,9 @@ export async function createPaymentIntent(req: Request, res: Response, next: Nex
       return res.status(409).json({ error: "Este pedido ya está pagado" });
     }
 
+    if (order.clientTransactionId) {
+      order.clientTransactionIds = [...(order.clientTransactionIds || []), order.clientTransactionId].slice(-20);
+    }
     order.clientTransactionId = `MEGA-${Date.now()}`;
     // Un intento rechazado deja el pedido cancelado; reintentar lo reabre.
     if (order.status === "cancelled") order.status = "pending";

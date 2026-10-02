@@ -67,6 +67,9 @@ const orderSchema = new Schema(
     // segun el origen; el resto los asigna el equipo desde el panel.
     status: { type: String, enum: ORDER_STATUSES, default: "pending" },
     clientTransactionId: { type: String, default: "", index: true },
+    // Intentos anteriores: cada vez que se abre el link de pago hay uno nuevo y
+    // el cliente pudo pagar en uno viejo.
+    clientTransactionIds: { type: [String], default: undefined, index: true },
     payphoneTransactionId: { type: Number },
     // Llave secreta del enlace de pago (/pagar/:token). No es el _id para que
     // nadie pueda abrir pedidos ajenos probando ids.

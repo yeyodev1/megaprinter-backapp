@@ -2,7 +2,7 @@ import { BankDetails, bankText } from "../transfer.service";
 import { detectBank } from "../banks";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid } from "./intents";
 
 /**
  * MAQUINA DE ESTADOS DEL BOT DE WHATSAPP.
@@ -137,11 +137,21 @@ export interface OrderSummary {
   createdAt: Date;
 }
 
+/** Resultado de verificar con Payphone un pago con tarjeta que el cliente dice haber hecho. */
+export interface CardCheck {
+  outcome: "already_paid" | "paid_now" | "pending" | "rejected" | "mismatch" | "error";
+  orderNumber: string;
+  total: number;
+  paymentLink: string;
+}
+
 export interface BotDeps {
   loadCatalog: () => Promise<BotProduct[]>;
   extract: Extractor;
   createOrder: (state: BotState) => Promise<CreatedOrder>;
   receiveReceipt: (orderId: string, mediaUrl: string) => Promise<ReceiptOutcome>;
+  /** Verifica con Payphone el pago con tarjeta del pedido del chat (o el ultimo del telefono). null si no hay. */
+  checkCardPayment: (orderId: string) => Promise<CardCheck | null>;
   /** Pedidos del telefono del chat, o el pedido con ese numero ("MP-00012"). */
   findOrders: (orderNumber?: string) => Promise<OrderSummary[]>;
   /** Cuentas activas para transferir (vacio = transferencias apagadas). */
@@ -316,7 +326,8 @@ function applyStageAnswer(state: BotState, message: string, deps: BotDeps): bool
     case "address":
       if (!state.address) {
         if (/\bretir/i.test(normalize(text))) state.address = "Retiro en tienda";
-        else if (text.length >= 6 && !isYes(text) && !isNo(text)) state.address = text.slice(0, 300);
+        // Ciudades cortas ("Loja", "Quito") tambien valen; una forma de pago no es una direccion.
+        else if (text.length >= 3 && /\p{L}/u.test(text) && !isYes(text) && !isNo(text) && !detectPaymentMethod(text)) state.address = text.slice(0, 300);
       }
       return Boolean(state.address);
     case "payment": {
@@ -475,6 +486,43 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     });
   }
 
+  // R3: "pagado" con un pedido de tarjeta: se verifica con Payphone y se confirma.
+  if (claimsPaid(message) && state.paymentMethod !== "transfer") {
+    const check = await deps.checkCardPayment(state.orderId);
+    if (check) {
+      const extra = { intent: "consultar_pedido" as const, orderNumber: check.orderNumber, paymentMethod: "card" as const, total: check.total };
+      if (check.outcome === "paid_now" || check.outcome === "already_paid") {
+        return reply(
+          state,
+          `Listo! ✅ Tu pago de *${money(check.total)}* del pedido *${check.orderNumber}* está confirmado 💙 El equipo te escribe para coordinar la entrega 🚚✨`,
+          check.outcome === "paid_now" ? "R3:pago_confirmado" : "R3:pago_ya_confirmado",
+          extra,
+        );
+      }
+      if (check.outcome === "rejected") {
+        return reply(
+          state,
+          `Uy, el pago del pedido *${check.orderNumber}* salió rechazado 😕 Puedes intentarlo otra vez con otra tarjeta aquí 👇\n${check.paymentLink}\n\nSi prefieres, también puedes pagar por *transferencia* 🏦`,
+          "R3:pago_rechazado",
+          extra,
+        );
+      }
+      if (check.outcome === "mismatch") {
+        return reply(state, `Recibimos un pago para el pedido *${check.orderNumber}*, pero el monto no coincide 🤔 Te paso con una persona del equipo para revisarlo 🙌`, "R3:pago_monto_distinto", {
+          ...extra,
+          intent: "dudas",
+          route: "human",
+        });
+      }
+      return reply(
+        state,
+        `Todavía no me aparece el pago del pedido *${check.orderNumber}* 🤔 Si ya lo hiciste, dame un minutito y escríbeme *pagado* otra vez. Si aún no, aquí tienes tu link seguro 👇\n${check.paymentLink}`,
+        check.outcome === "error" ? "R3:pago_error_verificando" : "R3:pago_pendiente",
+        extra,
+      );
+    }
+  }
+
   // R3: consultar pedidos (o "ya transferí" con el pedido abierto).
   if (wantsTracking(message) || orderNumberIn(message)) {
     if (state.stage === "ordered" && state.paymentMethod === "transfer" && /transfer|pague|deposit/.test(normalize(message))) {
@@ -598,6 +646,19 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     return askNext(state, deps, "R6:quitado", state.cart.length ? `Listo, lo quité 👍\n\n${cartLines(state.cart)}\nTotal: *${money(cartTotal(state.cart))}*` : "Listo, lo quité 👍 Tu carrito quedó vacío.");
   }
 
+  // "tarjeta" / "transferencia" con carrito es la forma de pago, nunca una busqueda
+  // de producto (antes "tarjeta" en el resumen agregaba una impresora al pedido).
+  const namedMethod = detectPaymentMethod(message);
+  if (namedMethod && state.cart.length && state.stage !== "choosing" && extraction.intent !== "pregunta") {
+    const available = namedMethod === "card" ? deps.cardEnabled : deps.banks.length > 0;
+    if (!available) {
+      const other = namedMethod === "card" ? "transferencia bancaria 🏦" : "tarjeta con link de Payphone 💳";
+      return askNext(state, deps, "R6:pago_no_disponible", `Por ahora ese medio no lo tenemos activo 🙏 Puedes pagar con ${other}`);
+    }
+    state.paymentMethod = namedMethod;
+    return askNext(state, deps, "R6:pago", "Perfecto 👍");
+  }
+
   // R7: confirmacion del resumen.
   if (state.stage === "confirm") {
     if (isYes(message) && missingStage(state, deps) === "confirm") {
@@ -631,8 +692,11 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     }
   }
 
+  // "también una impresora" cuando se pide el nombre es un producto, no un nombre.
+  const asksProduct =
+    /\b(tambien|ademas|otra|otro|agrega|agregame|anade|quiero|busco|necesito)\b/.test(normalize(message)) && searchProducts(catalog, message).length > 0;
   // Respuesta al paso pendiente (nombre, correo, direccion, pago) con reglas.
-  if (["name", "email", "address", "payment", "bank"].includes(state.stage) && applyStageAnswer(state, message, deps)) {
+  if (!asksProduct && ["name", "email", "address", "payment", "bank"].includes(state.stage) && applyStageAnswer(state, message, deps)) {
     return askNext(state, deps, `R6:dato_${state.stage}`);
   }
   const dataChanged = dataBefore !== JSON.stringify([state.customerName, state.customerEmail, state.address, state.paymentMethod, state.bankId]);

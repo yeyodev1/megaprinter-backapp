@@ -8,8 +8,10 @@ import assert from "assert/strict";
 import { BotProduct } from "../src/services/whatsappBot/catalog";
 import { aiExtract, cleanAnswer, heuristicExtract, answerPricesAreReal } from "../src/services/whatsappBot/extractor";
 import * as gemini from "../src/services/gemini.service";
+import axios from "axios";
+import { decideFromSale, paymentAttempts, settleCardPayment } from "../src/services/payphone.service";
 import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
-import { BotDeps, BotState, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
+import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 
@@ -37,7 +39,7 @@ interface Fake {
   receipts: Array<{ orderId: string; url: string }>;
 }
 
-function fakeDeps(options: { bank?: boolean; banks?: typeof FOUR_BANKS; card?: boolean; receipt?: ReceiptOutcome; orders?: OrderSummary[] } = {}): Fake {
+function fakeDeps(options: { bank?: boolean; banks?: typeof FOUR_BANKS; card?: boolean; receipt?: ReceiptOutcome; orders?: OrderSummary[]; cardCheck?: CardCheck | null } = {}): Fake {
   const created: BotState[] = [];
   const receipts: Array<{ orderId: string; url: string }> = [];
   return {
@@ -56,6 +58,7 @@ function fakeDeps(options: { bank?: boolean; banks?: typeof FOUR_BANKS; card?: b
         return options.receipt || { status: "stored", orderNumber: "MP-00001", total: 649, detectedAmount: 649, amountMatches: true, isReceipt: true };
       },
       findOrders: async () => options.orders || [],
+      checkCardPayment: async () => (options.cardCheck === undefined ? null : options.cardCheck),
       banks: options.bank === false ? [] : options.banks || [BANK],
       cardEnabled: options.card !== false,
       supportPhone: "",
@@ -258,6 +261,92 @@ async function main() {
     assert.equal(result.decision, "R0:no_escribir");
     assert.equal(result.state.optOut, true);
     assert.equal(wantsOptOut("hola, busco una laptop"), false);
+  });
+
+  await test("'pagado' con tarjeta: Mila verifica con Payphone y responde según el estado real", async () => {
+    const check = (outcome: CardCheck["outcome"]): CardCheck => ({ outcome, orderNumber: "MP-00020", total: 649, paymentLink: "https://megaprinter.ec/pagar/tok" });
+    const paid = (await conversation(fakeDeps({ cardCheck: check("paid_now") }), ["ya pagué"]))[0];
+    assert.equal(paid.decision, "R3:pago_confirmado");
+    assert.match(paid.reply, /\$649\.00[\s\S]*MP-00020[\s\S]*confirmado/);
+    const again = (await conversation(fakeDeps({ cardCheck: check("already_paid") }), ["pagado"]))[0];
+    assert.equal(again.decision, "R3:pago_ya_confirmado");
+    const pending = (await conversation(fakeDeps({ cardCheck: check("pending") }), ["listo pagué"]))[0];
+    assert.equal(pending.decision, "R3:pago_pendiente");
+    assert.match(pending.reply, /pagar\/tok/);
+    const rejected = (await conversation(fakeDeps({ cardCheck: check("rejected") }), ["pagado"]))[0];
+    assert.equal(rejected.decision, "R3:pago_rechazado");
+    const mismatch = (await conversation(fakeDeps({ cardCheck: check("mismatch") }), ["pagado"]))[0];
+    assert.equal(mismatch.route, "human");
+    // Pedido por transferencia: "ya pagué" pide el comprobante, no consulta Payphone.
+    const transfer = await conversation(fakeDeps({ cardCheck: check("pending") }), ["monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "transferencia", "si", "ya pagué"]);
+    assert.equal(transfer.at(-1)!.decision, "R3:pedir_comprobante");
+  });
+
+  await test("Payphone: confirma el intento aprobado (aunque sea viejo) y no toca lo pendiente", async () => {
+    assert.equal(decideFromSale({ found: false }), "pending");
+    assert.equal(decideFromSale({ found: true, statusCode: 3, transactionId: 99 }), "confirm");
+    assert.equal(decideFromSale({ found: true, statusCode: 2 }), "rejected");
+    assert.equal(decideFromSale({ found: true, statusCode: 1, transactionId: 5 }), "pending");
+    assert.deepEqual(paymentAttempts({ clientTransactionId: "C", clientTransactionIds: ["A", "B"] }), ["C", "B", "A"]);
+
+    const originalGet = axios.get;
+    const originalPost = axios.post;
+    const confirms: string[] = [];
+    process.env.PAYPHONE_TOKEN = process.env.PAYPHONE_TOKEN || "test";
+    const makeOrder = () => ({ source: "payphone", status: "pending", totalAmount: 649, clientTransactionId: "C", clientTransactionIds: ["A", "B"], saves: 0, async save() { this.saves += 1; } });
+    try {
+      // Pagó en el intento "A" (viejo); "C" y "B" no existen en Payphone.
+      (axios as any).get = async (url: string) =>
+        url.endsWith("/A") ? { status: 200, data: { statusCode: 3, transactionStatus: "Approved", transactionId: 777 } } : { status: 404, data: { message: "No existe", errorCode: 1 } };
+      (axios as any).post = async (_url: string, body: any) => {
+        confirms.push(body.clientTxId);
+        return { data: { statusCode: 3, transactionStatus: "Approved", transactionId: 777, amount: 64900 } };
+      };
+      const order: any = makeOrder();
+      assert.equal(await settleCardPayment(order), "paid_now");
+      assert.equal(order.status, "paid");
+      assert.equal(order.payphoneTransactionId, 777);
+      assert.deepEqual(confirms, ["A"]);
+      assert.equal(await settleCardPayment(order), "already_paid", "segundo 'pagado' no vuelve a confirmar");
+      assert.equal(confirms.length, 1);
+
+      // Monto distinto: no queda pagado.
+      (axios as any).post = async () => ({ data: { statusCode: 3, transactionId: 777, amount: 100 } });
+      const cheap: any = makeOrder();
+      assert.equal(await settleCardPayment(cheap), "mismatch");
+      assert.equal(cheap.status, "pending");
+
+      // Todavía no paga: el pedido queda intacto.
+      (axios as any).get = async () => ({ status: 404, data: { message: "No existe", errorCode: 1 } });
+      const untouched: any = makeOrder();
+      assert.equal(await settleCardPayment(untouched), "pending");
+      assert.equal(untouched.status, "pending");
+      assert.equal(untouched.saves, 0);
+    } finally {
+      (axios as any).get = originalGet;
+      (axios as any).post = originalPost;
+    }
+  });
+
+  await test("'tarjeta' en el resumen no busca productos ni agrega nada", async () => {
+    const fake = fakeDeps({ bank: false });
+    const results = await conversation(fake, ["monitor", "1", "Eva Ruiz", "eva@mail.com", "retiro", "tarjeta", "si"]);
+    assert.equal(results[4].step, "confirm", "con un solo método pasa directo al resumen");
+    assert.equal(results[5].decision, "R6:pago");
+    assert.equal(results[5].state.cart.length, 1);
+    assert.equal(results[6].intent, "orden_creada");
+    assert.equal(fake.created[0].cart.length, 1);
+    const off = (await conversation(fakeDeps({ bank: false }), ["monitor", "1", "Eva Ruiz", "eva@mail.com", "retiro", "transferencia"])).at(-1)!;
+    assert.equal(off.decision, "R6:pago_no_disponible");
+    assert.match(off.reply, /tarjeta/);
+  });
+
+  await test("'también una impresora' al pedir el nombre agrega otro producto", async () => {
+    const results = await conversation(fakeDeps(), ["monitor", "1", "también una impresora", "1", "Lucía Vega"]);
+    assert.equal(results[2].decision, "R8:busqueda");
+    assert.equal(results[2].state.customerName, "");
+    assert.equal(results[3].state.cart.length, 2);
+    assert.equal(results[4].state.customerName, "Lucía Vega");
   });
 
   await test("pedir asesor deriva con intencion dudas", async () => {

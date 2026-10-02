@@ -12,7 +12,8 @@
     "catalog:upload": "ts-node-dev --transpile-only scripts/upload-catalog-images.ts",
     "catalog:import": "ts-node-dev --transpile-only scripts/import-offers.ts",
     "user:create": "ts-node-dev --transpile-only scripts/create-user.ts",
-    "test:bot": "ts-node-dev --transpile-only scripts/test-whatsapp-bot.ts"
+    "test:bot": "ts-node-dev --transpile-only scripts/test-whatsapp-bot.ts",
+    "bot:logs": "ts-node-dev --transpile-only scripts/bot-logs.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",

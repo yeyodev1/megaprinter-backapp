@@ -16,18 +16,27 @@ export const storeRecipients = () => [
  * Resend solo entrega al dueño de la cuenta; para llegar a clientes hay que
  * verificar el dominio y poner EMAIL_FROM (ej. "Megaprinter <pedidos@megaprinter.ec>").
  */
-export async function sendEmail(to: string | string[], subject: string, html: string, replyTo?: string) {
+export async function sendEmail(
+  to: string | string[],
+  subject: string,
+  html: string,
+  replyTo?: string,
+): Promise<{ ok: boolean; error?: string }> {
   const resendApiKey = process.env.RESEND_API_KEY;
   const recipients = (Array.isArray(to) ? to : [to]).filter(Boolean);
-  if (!resendApiKey || !recipients.length) return;
+  if (!recipients.length) return { ok: false, error: "Sin destinatario" };
+  if (!resendApiKey) return { ok: false, error: "Falta RESEND_API_KEY" };
   try {
     await axios.post(
       "https://api.resend.com/emails",
       { from: emailFrom(), to: recipients, ...(replyTo ? { reply_to: replyTo } : {}), subject, html },
       { headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" }, timeout: 10000 },
     );
+    return { ok: true };
   } catch (error: any) {
-    console.error(`[correo] no se pudo enviar "${subject}" a ${recipients.join(", ")}:`, error?.response?.data || error?.message);
+    const detail = String(error?.response?.data?.message || error?.message || error).slice(0, 300);
+    console.error(`[correo] no se pudo enviar "${subject}" a ${recipients.join(", ")}: ${detail}`);
+    return { ok: false, error: detail };
   }
 }
 
@@ -54,15 +63,15 @@ const SOURCE_LABEL: Record<string, string> = {
   whatsapp: "Por coordinar con un asesor",
 };
 
-/** Aviso al equipo de un pedido nuevo (web o bot). */
-export function notifyNewOrder(order: OrderForEmail, channelLabel: string) {
+/** Correo al equipo de un pedido nuevo (web o bot). */
+export function newOrderEmail(order: OrderForEmail, channelLabel: string) {
   const itemsList = order.items
     .map((item) => `- ${escapeHtml(item.name)} (x${item.quantity}): $${((item.price || 0) * (item.quantity || 0)).toFixed(2)}`)
     .join("<br>");
 
-  return sendStoreEmail(
-    `Nuevo pedido ${order.orderNumber || ""} de ${order.customerName} - $${order.totalAmount.toFixed(2)}`.replace(/\s+/g, " "),
-    `
+  return {
+    subject: `Nuevo pedido ${order.orderNumber || ""} de ${order.customerName} - $${order.totalAmount.toFixed(2)}`.replace(/\s+/g, " "),
+    html: `
       <h2>Nuevo pedido / cotización - Megaprinter</h2>
       <p><strong>Pedido:</strong> ${escapeHtml(order.orderNumber || "-")} · ${escapeHtml(channelLabel)}</p>
       <p><strong>Pago:</strong> ${escapeHtml(SOURCE_LABEL[order.source] || order.source)}</p>
@@ -74,6 +83,5 @@ export function notifyNewOrder(order: OrderForEmail, channelLabel: string) {
       <p>${itemsList}</p>
       <h3>Total: $${order.totalAmount.toFixed(2)}</h3>
     `,
-    order.customerEmail,
-  );
+  };
 }

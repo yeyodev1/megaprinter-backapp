@@ -1,8 +1,9 @@
 import { BankDetails, bankText } from "../transfer.service";
 import { detectBank } from "../banks";
+import { DEVICES, ServiceEstimate, detectDevice, deviceEmoji, deviceLabel, estimateService, priceText } from "./serviceCatalog";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies } from "./intents";
 
 /**
  * MAQUINA DE ESTADOS DEL BOT DE WHATSAPP.
@@ -17,7 +18,7 @@ import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isY
  * preguntas · R9 siguiente paso.
  */
 
-export type Stage = "idle" | "choosing" | "name" | "email" | "address" | "payment" | "bank" | "confirm" | "ordered";
+export type Stage = "idle" | "choosing" | "name" | "email" | "address" | "payment" | "bank" | "confirm" | "ordered" | "ticket_name" | "ticket_device" | "ticket_issue" | "ticket_confirm";
 
 export interface CartLine {
   productId: string;
@@ -39,6 +40,8 @@ export interface BotState {
   bankId: string;
   /** Pidio que no le escriban (queda registrado en la conversacion). */
   optOut: boolean;
+  /** Solicitud de servicio tecnico o suministros en curso (la termina un asesor). */
+  ticket: { type: "servicio_tecnico" | "suministros" | ""; device: string; issue: string; stageBefore: Stage };
   orderId: string;
   orderNumber: string;
   lastQuestion: string;
@@ -54,6 +57,7 @@ export const createInitialState = (): BotState => ({
   paymentMethod: null,
   bankId: "",
   optOut: false,
+  ticket: { type: "", device: "", issue: "", stageBefore: "idle" },
   orderId: "",
   orderNumber: "",
   lastQuestion: "",
@@ -148,6 +152,14 @@ export interface CardCheck {
   paymentLink: string;
 }
 
+export interface TicketDraft {
+  type: "servicio_tecnico" | "suministros";
+  customerName: string;
+  device: string;
+  issue: string;
+  estimate: ServiceEstimate | null;
+}
+
 export interface BotDeps {
   loadCatalog: () => Promise<BotProduct[]>;
   extract: Extractor;
@@ -155,6 +167,8 @@ export interface BotDeps {
   receiveReceipt: (orderId: string, mediaUrl: string) => Promise<ReceiptOutcome>;
   /** Verifica con Payphone el pago con tarjeta del pedido del chat (o el ultimo del telefono). null si no hay. */
   checkCardPayment: (orderId: string) => Promise<CardCheck | null>;
+  /** Registra el ticket de servicio tecnico o suministros y avisa al equipo. */
+  createTicket: (draft: TicketDraft) => Promise<{ ticketNumber: string }>;
   /** Pedidos del telefono del chat, o el pedido con ese numero ("MP-00012"). */
   findOrders: (orderNumber?: string) => Promise<OrderSummary[]>;
   /** Cuentas activas para transferir (vacio = transferencias apagadas). */
@@ -166,7 +180,7 @@ export interface BotDeps {
 
 // ─── Textos ──────────────────────────────────────────────────────────────────
 
-const QUESTIONS: Record<Exclude<Stage, "idle" | "choosing" | "confirm" | "ordered" | "bank">, string> = {
+const QUESTIONS: Partial<Record<Stage, string>> = {
   name: "A nombre de quién va tu pedido? 😊 Pásame tu nombre y apellido",
   email: "Y tu correo? 📧 Ahí te llega la confirmación de tu compra",
   address: "A qué dirección y ciudad te lo enviamos? 🚚 Si prefieres retirarlo en la tienda, escríbeme *retiro* 🏪",
@@ -184,7 +198,7 @@ function questionFor(stage: Stage, deps: BotDeps) {
 
 const chosenBank = (state: BotState, deps: BotDeps) => deps.banks.find((account) => account.id === state.bankId) || null;
 
-const ASK_PRODUCT = "Cuéntame qué estás buscando 💻🖨️✨ Puedes escribirme algo como \"laptop i7 16GB\" o \"impresora de tinta continua\", mandarme una foto 📸 o pedirme el *catálogo* 📚";
+const ASK_PRODUCT = "Cuéntame qué buscas hoy 💻🖨️ Puedes escribirme algo como \"laptop i7 16GB\" o \"impresora de tinta continua\", pedirme *servicio técnico* 🛠️ o *suministros* 🧴, mandarme una foto 📸 o pedirme el *catálogo* 📚";
 
 export const FALLBACK_MESSAGE = ASK_PRODUCT;
 
@@ -384,8 +398,9 @@ function askNext(state: BotState, deps: BotDeps, decision: string, prefix = ""):
 function showOptions(state: BotState, products: BotProduct[], decision: string, intro?: string): TurnResult {
   state.options = products.map(toOption);
   state.stage = "choosing";
-  const list = products.map((product, index) => productLine(product, index + 1)).join("\n");
-  const ask = products.length === 1 ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*" : "Cuál te agrego? 🛒 Respóndeme con el número";
+  // El catalogo completo es una opcion mas de la lista.
+  const list = [...products.map((product, index) => productLine(product, index + 1)), `*${products.length + 1}.* 📚 Ver el catálogo completo`].join("\n");
+  const ask = `${products.length === 1 ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*" : "Cuál te agrego? 🛒 Respóndeme con el número"}\nSi prefieres hablar con una persona, escribe *asesor* 🙋`;
   return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}`, decision);
 }
 
@@ -421,6 +436,143 @@ function cardCheckReply(state: BotState, check: CardCheck): TurnResult {
     check.outcome === "error" ? "R3:pago_error_verificando" : "R3:pago_pendiente",
     extra,
   );
+}
+
+// ─── Tickets de servicio tecnico y suministros ──────────────────────────────
+
+const TICKET_STAGES: Stage[] = ["ticket_name", "ticket_device", "ticket_issue", "ticket_confirm"];
+const isTicketStage = (stage: Stage) => TICKET_STAGES.includes(stage);
+
+const FILLER = new Set(
+  "hola buenas buenos dias tardes noches necesito quiero busco servicio soporte tecnico tecnica suministro suministros ayuda ayudar ayudan por favor porfa para mi mis el la los las de del con un una que me se y o tengo hay esta es un su sus al".split(" "),
+);
+const DEVICE_WORDS = new Set(DEVICES.flatMap((device) => device.words as readonly string[]));
+
+/** Quedan al menos 2 palabras que no son saludo, relleno ni el nombre del equipo. */
+function describesProblem(message: string) {
+  return normalize(message).split(" ").filter((word) => word && !FILLER.has(word) && !DEVICE_WORDS.has(word)).length >= 2;
+}
+
+function startTicket(state: BotState, type: "servicio_tecnico" | "suministros", message: string) {
+  const device = type === "servicio_tecnico" ? detectDevice(message) : "";
+  // Si el mensaje ya cuenta el problema ("mi impresora no imprime"), se usa como descripcion.
+  // "necesito servicio tecnico para mi impresora" no cuenta ningun problema.
+  const issue = describesProblem(message) ? message.trim().slice(0, 500) : "";
+  state.ticket = { type, device, issue, stageBefore: isTicketStage(state.stage) ? state.ticket.stageBefore : state.stage };
+}
+
+function ticketMissing(state: BotState): Stage {
+  if (!state.customerName) return "ticket_name";
+  if (state.ticket.type === "servicio_tecnico" && !state.ticket.device) return "ticket_device";
+  if (!state.ticket.issue) return "ticket_issue";
+  return "ticket_confirm";
+}
+
+function ticketSummary(state: BotState, deps: BotDeps, catalog: BotProduct[]) {
+  if (state.ticket.type === "suministros") {
+    return [
+      "Perfecto, armé tu solicitud 🧴",
+      "",
+      "🧾 *Suministros*",
+      `📝 Necesitas: ${state.ticket.issue}`,
+      `👤 ${state.customerName}`,
+      "💲 Te cotizamos según la marca y el modelo",
+      "",
+      "La registro y te paso con un asesor? Respóndeme *sí* ✅",
+    ].join("\n");
+  }
+  const estimate = estimateService(state.ticket.device, state.ticket.issue, catalog);
+  return [
+    "Perfecto, armé tu solicitud 🛠️",
+    "",
+    "🧾 *Servicio técnico*",
+    `${deviceEmoji(state.ticket.device)} Equipo: ${deviceLabel(state.ticket.device)}`,
+    `📝 Problema: ${state.ticket.issue}`,
+    `👤 ${state.customerName}`,
+    `💲 Precio referencial: ${priceText(estimate)} (${estimate.label.toLowerCase()})`,
+    "_El diagnóstico es sin costo y el técnico te confirma el precio._",
+    "",
+    "La registro y te paso con un asesor? Respóndeme *sí* ✅",
+  ].join("\n");
+}
+
+async function askTicketNext(state: BotState, deps: BotDeps, decision: string, prefix = ""): Promise<TurnResult> {
+  state.stage = ticketMissing(state);
+  const join = (text: string) => (prefix ? `${prefix}\n\n${text}` : text);
+  if (state.stage === "ticket_name") return reply(state, join("Para registrar tu solicitud, a nombre de quién la pongo? 😊 Pásame tu nombre y apellido"), decision);
+  if (state.stage === "ticket_device") {
+    const list = DEVICES.map((device, index) => `*${index + 1}.* ${device.emoji} ${device.label}`).join("\n");
+    return reply(state, join(`Con qué equipo te ayudamos? 🛠️\n${list}`), decision);
+  }
+  if (state.stage === "ticket_issue") {
+    return reply(
+      state,
+      join(
+        state.ticket.type === "suministros"
+          ? "Qué suministro necesitas? 🧴 Cuéntame la marca y el modelo de tu impresora y qué buscas (tinta, tóner, cartucho, papel)"
+          : `Cuéntame más o menos qué problema tiene tu ${deviceLabel(state.ticket.device).toLowerCase()} 📝 (por ejemplo: no imprime, no enciende, está lenta)`,
+      ),
+      decision,
+    );
+  }
+  return reply(state, join(ticketSummary(state, deps, await deps.loadCatalog())), decision);
+}
+
+/** Respuesta a un paso del ticket. Devuelve null si el mensaje no es para el ticket. */
+async function handleTicketStep(state: BotState, message: string, deps: BotDeps): Promise<TurnResult | null> {
+  const text = message.trim();
+  if (wantsCancel(text) || /^(cancelar|olvidalo|ya no)$/i.test(normalize(text))) {
+    state.stage = state.ticket.stageBefore === "ordered" ? "idle" : state.ticket.stageBefore || "idle";
+    state.ticket = createInitialState().ticket;
+    return reply(state, "Listo, cancelé la solicitud 👍 Si necesitas algo más, aquí estoy 😊", "R10:ticket_cancelado");
+  }
+  if (state.stage === "ticket_name") {
+    if (!looksLikeName(text)) return reply(state, "Me pasas tu nombre y apellido? 😊", "R10:ticket_nombre_invalido");
+    state.customerName = text.replace(/\s+/g, " ");
+    return askTicketNext(state, deps, "R10:ticket_nombre");
+  }
+  if (state.stage === "ticket_device") {
+    const choice = extractChoice(text, DEVICES.length);
+    state.ticket.device = choice ? DEVICES[choice - 1].key : detectDevice(text) || text.slice(0, 60);
+    if (!state.ticket.issue && detectDevice(text) && describesProblem(text)) state.ticket.issue = text.slice(0, 500);
+    return askTicketNext(state, deps, "R10:ticket_equipo");
+  }
+  if (state.stage === "ticket_issue") {
+    if (text.length < 3) return askTicketNext(state, deps, "R10:ticket_detalle_corto");
+    state.ticket.issue = text.slice(0, 500);
+    return askTicketNext(state, deps, "R10:ticket_detalle");
+  }
+  if (state.stage === "ticket_confirm") {
+    if (isYes(text)) {
+      const catalog = await deps.loadCatalog();
+      const estimate = state.ticket.type === "servicio_tecnico" ? estimateService(state.ticket.device, state.ticket.issue, catalog) : null;
+      const { ticketNumber } = await deps.createTicket({
+        type: state.ticket.type as "servicio_tecnico" | "suministros",
+        customerName: state.customerName,
+        device: state.ticket.device,
+        issue: state.ticket.issue,
+        estimate,
+      });
+      const kind = state.ticket.type === "suministros" ? "solicitud de suministros" : "ticket de servicio técnico";
+      state.stage = "idle";
+      state.ticket = createInitialState().ticket;
+      return reply(
+        state,
+        `Listo! ✅ Tu ${kind} *${ticketNumber}* quedó registrado 🙌\n\nEn breve un asesor tomará el chat para ayudarte 💙`,
+        "R10:ticket_creado",
+        { intent: "dudas", route: "human" },
+      );
+    }
+    // "no" / "no, está mal" corrige; "no imprime, sale con rayas" es mas detalle del problema.
+    if (isNo(text) && normalize(text).split(" ").length <= 3 && !describesProblem(text.replace(/^no\b/i, ""))) {
+      state.ticket.issue = "";
+      return askTicketNext(state, deps, "R10:ticket_corregir", "Claro! ✏️ Volvamos a contarlo");
+    }
+    // Agrega detalle y vuelve a mostrar el resumen.
+    state.ticket.issue = `${state.ticket.issue}. ${text}`.slice(0, 500);
+    return askTicketNext(state, deps, "R10:ticket_mas_detalle", "Anotado 📝");
+  }
+  return null;
 }
 
 // ─── Turno ───────────────────────────────────────────────────────────────────
@@ -528,6 +680,24 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     });
   }
 
+  // R10: servicio tecnico y suministros (los atiende un asesor).
+  if (isTicketStage(state.stage)) {
+    const ticketReply = await handleTicketStep(state, message, deps);
+    if (ticketReply) return ticketReply;
+  }
+  const normalized = normalize(message);
+  // "no funciona el link de pago" es del pago, no servicio tecnico.
+  const aboutPayment = /\b(link|pago|pagar|tarjeta|transferencia|comprobante|pedido|payphone)\b/.test(normalized);
+  const serviceAsked = wantsService(message) && !claimsPaid(message) && !aboutPayment;
+  // "impresora de tinta continua" es un producto; "tinta para mi Epson" o "toner" son suministros.
+  const explicitSupplies = /\b(suministros?|toner|cartuchos?|botellas?|repuestos?|consumibles?)\b/.test(normalized);
+  const suppliesAsked = !serviceAsked && wantsSupplies(message) && state.stage !== "choosing" && (explicitSupplies || !/\b(impresoras?|multifuncion|laptop|monitor|camara)\b/.test(normalized));
+  if (serviceAsked || suppliesAsked) {
+    startTicket(state, serviceAsked ? "servicio_tecnico" : "suministros", message);
+    const intro = serviceAsked ? "Claro! Te ayudo con el servicio técnico 🛠️" : "Claro! Te ayudo con los suministros 🧴";
+    return askTicketNext(state, deps, serviceAsked ? "R10:servicio_tecnico" : "R10:suministros", intro);
+  }
+
   // R3: "pagado" con un pedido de tarjeta: se verifica con Payphone y se confirma.
   if (claimsPaid(message) && state.paymentMethod !== "transfer") {
     const check = await deps.checkCardPayment(state.orderId);
@@ -584,6 +754,12 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
 
   // R5: eleccion entre las opciones mostradas ("2", "la segunda", "sí" con una sola opcion).
   if (state.stage === "choosing" && state.options.length) {
+    if (extractChoice(message, state.options.length + 1) === state.options.length + 1) {
+      const catalogItems = await deps.loadCatalog();
+      state.options = [];
+      state.stage = state.cart.length ? missingStage(state, deps) : "idle";
+      return reply(state, catalogOverview(catalogItems, deps.storeUrl), "R5:catalogo_completo", { intent: "menu", route: "catalog" });
+    }
     const choice = extractChoice(message, state.options.length) || (state.options.length === 1 && isYes(message) ? 1 : null);
     if (choice) {
       const option = state.options[choice - 1];
@@ -762,7 +938,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
 
   // R9: saludo o algo que no se entendio: se retoma el paso pendiente.
   if (isGreeting(message) && !state.cart.length) {
-    return reply(state, `Hola! 👋💙 Soy *${botName()}* 🤖, el bot de *Megaprinter* y tu agente para lo que necesites ✨ Pídeme lo que necesites, aquí estoy para ayudarte siempre 🙌\n\n${ASK_PRODUCT}`, "R9:saludo");
+    return reply(state, `Hola! Soy *${botName()}* 🤖, la bot de *Megaprinter* y tu agente para lo que necesites. Aquí estoy para ayudarte siempre!\n\n${ASK_PRODUCT}`, "R9:saludo");
   }
   if (state.stage === "choosing") {
     return reply(state, "No te entendí 🙏 Responde con el número de la opción que quieres, o dime qué otra cosa buscas.", "R9:eleccion_no_entendida");
@@ -803,6 +979,8 @@ export function decideRoute(
   if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
   if (wantsTracking(message) || orderNumberIn(message)) return { route: "conversation", reason: "consulta de pedido" };
+  // "sí" al resumen del ticket: se registra y el chat pasa a un asesor (el flujo silencia el bot).
+  if (state.stage === "ticket_confirm" && isYes(message)) return { route: "human", reason: "confirma ticket de servicio" };
   if (state.stage === "confirm" && isYes(message)) {
     if (state.paymentMethod === "transfer" && options.bank) return { route: "checkoutTransfer", reason: "confirma pedido por transferencia" };
     if (state.paymentMethod === "card" && options.cardEnabled) return { route: "checkoutCard", reason: "confirma pedido con tarjeta" };

@@ -6,6 +6,8 @@ import { WhatsAppSessionModel } from "../models/whatsappSession.model";
 import { notifyOrderCreated } from "../services/orderNotifications.service";
 import { geminiEnabled } from "../services/gemini.service";
 import { settleCardPayment } from "../services/payphone.service";
+import { createServiceTicket } from "../services/tickets.service";
+import { createAlert } from "../services/alerts.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
 import { naturalize } from "../services/whatsappBot/voice";
 import { claimsPaid } from "../services/whatsappBot/intents";
@@ -384,6 +386,14 @@ async function buildDeps(phone: string): Promise<BotDeps> {
     receiveReceipt: (orderId, mediaUrl) => receiveMedia(phone, orderId, mediaUrl),
     findOrders: (orderNumber) => findOrders(phone, orderNumber),
     checkCardPayment: (orderId) => checkCardPayment(phone, orderId),
+    createTicket: async (draft) => {
+      const ticket = await createServiceTicket({
+        ...draft,
+        channel: "whatsapp_bot",
+        customerPhone: isLid(phone) ? "WhatsApp (número oculto)" : phone,
+      });
+      return { ticketNumber: ticket.ticketNumber || "" };
+    },
     banks: await activeBankAccounts(),
     cardEnabled: cardEnabled(),
     supportPhone: SUPPORT_PHONE(),
@@ -486,7 +496,8 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
 
     // Voz de Mila con IA: el mismo contenido, dicho distinto cada vez (sin repetir
     // sus ultimos mensajes). Con BOT_AI_VOICE=off se envia la plantilla tal cual.
-    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off") {
+    // El saludo va tal cual (texto acordado con el cliente).
+    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && result.decision !== "R9:saludo") {
       const lastBotMessages = history.filter((entry: any) => entry.role === "assistant").slice(-3).map((entry: any) => String(entry.content));
       result.reply = await naturalize(result.reply, lastBotMessages);
     }
@@ -620,6 +631,15 @@ export async function whatsappBotTurn(req: Request, res: Response) {
   try {
     const result = await runTurn(body);
     if (result) {
+      // Alguien pidio una persona: alerta en el panel (los tickets ya avisan por su cuenta).
+      if (result.route === "human" && !result.decision.startsWith("R10:") && !(result as any).duplicated) {
+        createAlert(
+          "human_handoff",
+          `🙋 ${result.state.customerName || phone} quiere hablar con un asesor`,
+          `Dijo: "${message.slice(0, 160)}". El bot quedó en silencio en ese chat.`,
+          `/admin/bot?phone=${encodeURIComponent(phone)}`,
+        );
+      }
       console.log(
         `[bot] ${phone} /${endpoint} → ${result.route} ${result.decision} paso=${result.step}${result.orderNumber ? ` ${result.orderNumber}` : ""} ${Date.now() - startedAt}ms | 👤 ${oneLine(message)} | 🤖 ${oneLine(result.reply)}`,
       );

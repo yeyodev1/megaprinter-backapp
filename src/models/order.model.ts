@@ -86,6 +86,11 @@ const orderSchema = new Schema(
       guideUrl: { type: String },
       shippedAt: { type: Date },
     },
+    // Cada correo que salio (o fallo) por este pedido: el panel avisa si alguno no llego.
+    emailLog: {
+      type: [{ _id: false, kind: String, to: String, ok: Boolean, error: String, at: { type: Date, default: Date.now } }],
+      default: undefined,
+    },
     // Cada cambio de etapa (quien y cuando), para el panel y la pagina de seguimiento.
     statusHistory: {
       type: [{ _id: false, status: String, at: { type: Date, default: Date.now }, by: String }],

@@ -14,6 +14,7 @@ import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
 import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
+import { estimateService } from "../src/services/whatsappBot/serviceCatalog";
 
 const CATALOG: BotProduct[] = [
   { id: "p1", name: "Laptop HP 15 Core i5 16GB RAM 512GB SSD", price: 649, originalPrice: 749, category: "Laptops", kind: "product", description: "Laptop para trabajo y estudio", specs: "Procesador: Intel Core i5; RAM: 16GB; Almacenamiento: 512GB SSD" },
@@ -36,15 +37,18 @@ const FOUR_BANKS = [
 interface Fake {
   deps: BotDeps;
   created: BotState[];
+  tickets: any[];
   receipts: Array<{ orderId: string; url: string }>;
 }
 
 function fakeDeps(options: { bank?: boolean; banks?: typeof FOUR_BANKS; card?: boolean; receipt?: ReceiptOutcome; orders?: OrderSummary[]; cardCheck?: CardCheck | null } = {}): Fake {
   const created: BotState[] = [];
   const receipts: Array<{ orderId: string; url: string }> = [];
+  const tickets: any[] = [];
   return {
     created,
     receipts,
+    tickets,
     deps: {
       loadCatalog: async () => CATALOG,
       extract: heuristicExtract,
@@ -59,6 +63,10 @@ function fakeDeps(options: { bank?: boolean; banks?: typeof FOUR_BANKS; card?: b
       },
       findOrders: async () => options.orders || [],
       checkCardPayment: async () => (options.cardCheck === undefined ? null : options.cardCheck),
+      createTicket: async (draft) => {
+        tickets.push(draft);
+        return { ticketNumber: `ST-0000${tickets.length}` };
+      },
       banks: options.bank === false ? [] : options.banks || [BANK],
       cardEnabled: options.card !== false,
       supportPhone: "",
@@ -232,7 +240,7 @@ async function main() {
     const fake = fakeDeps({ banks: FOUR_BANKS });
     const results = await conversation(fake, ["hola", "monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "transferencia", "2", "no", "si", "si"]);
     for (const result of results) assert.doesNotMatch(result.reply, /[¿¡]/, result.decision);
-    assert.match(results[0].reply, /Soy \*Mila\* 🤖, el bot de \*Megaprinter\*[\s\S]*ayudarte siempre/);
+    assert.match(results[0].reply, /^Hola! Soy \*Mila\* 🤖, la bot de \*Megaprinter\* y tu agente para lo que necesites\. Aquí estoy para ayudarte siempre![\s\S]*servicio técnico[\s\S]*suministros/);
   });
 
   await test("transparencia: si preguntan si es un bot, dice que sí", async () => {
@@ -361,6 +369,78 @@ async function main() {
     const orders: OrderSummary[] = [{ id: "s", orderNumber: "MP-00031", status: "shipped", source: "payphone", total: 90, transferStatus: "", paymentLink: "", carrier: "Servientrega", trackingNumber: "SV123", trackingUrl: "https://megaprinter.ec/pedido/t", createdAt: new Date() }];
     const result = (await conversation(fakeDeps({ orders }), ["estado de mi pedido"]))[0];
     assert.match(result.reply, /enviado 🚚 · guía Servientrega SV123[\s\S]*megaprinter\.ec\/pedido\/t/);
+  });
+
+  await test("servicio técnico: pide nombre, equipo y problema, muestra precio y crea ticket al confirmar", async () => {
+    const fake = fakeDeps();
+    const results = await conversation(fake, ["necesito servicio técnico", "Juan Pérez", "1", "no imprime, sale con rayas", "si"]);
+    assert.equal(results[0].step, "ticket_name");
+    assert.equal(results[1].step, "ticket_device");
+    assert.match(results[1].reply, /Impresora[\s\S]*Laptop/);
+    assert.equal(results[2].step, "ticket_issue");
+    const summary = results[3];
+    assert.equal(summary.step, "ticket_confirm");
+    assert.match(summary.reply, /Servicio técnico[\s\S]*Impresora[\s\S]*no imprime[\s\S]*\$20 – \$35[\s\S]*diagnóstico es sin costo/);
+    const done = results[4];
+    assert.equal(done.decision, "R10:ticket_creado");
+    assert.equal(done.route, "human");
+    assert.match(done.reply, /ST-00001[\s\S]*En breve un asesor tomará el chat/);
+    assert.equal(fake.tickets[0].device, "impresora");
+    assert.equal(fake.tickets[0].estimate.priceMin, 20);
+    assert.equal(decideRoute(summary.state, { message: "sí" }, { bank: true, cardEnabled: true }).route, "human", "/brain manda el sí al flujo de asesor");
+  });
+
+  await test("servicio técnico con todo en el primer mensaje va directo al resumen", async () => {
+    const fake = fakeDeps();
+    const results = await conversation(fake, ["mi laptop está muy lenta, necesito formatear", "Eva Ruiz"]);
+    assert.equal(results[0].step, "ticket_name");
+    assert.equal(results[1].step, "ticket_confirm", "ya sabía el equipo y el problema");
+    assert.match(results[1].reply, /Laptop[\s\S]*\$25 – \$40/);
+  });
+
+  await test("'servicio técnico para mi impresora' no es la descripción; 'no imprime' en el resumen es detalle, no un 'no'", async () => {
+    const fake = fakeDeps();
+    const results = await conversation(fake, ["necesito servicio técnico para mi impresora", "Juan Pérez", "no imprime, sale con rayas", "no enciende a veces", "si"]);
+    assert.equal(results[0].state.ticket.device, "impresora");
+    assert.equal(results[0].state.ticket.issue, "", "todavía no contó el problema");
+    assert.equal(results[1].step, "ticket_issue");
+    assert.equal(results[2].step, "ticket_confirm");
+    assert.equal(results[3].decision, "R10:ticket_mas_detalle", "'no enciende…' agrega detalle, no corrige");
+    assert.equal(results[4].decision, "R10:ticket_creado");
+    const corrected = await conversation(fakeDeps(), ["necesito servicio técnico", "Eva Ruiz", "2", "pantalla rota", "no"]);
+    assert.equal(corrected.at(-1)!.decision, "R10:ticket_corregir");
+  });
+
+  await test("suministros: pide el detalle y crea la solicitud sin precio", async () => {
+    const fake = fakeDeps();
+    const results = await conversation(fake, ["necesito tinta", "Carla Vera", "tinta negra para Epson L3250", "sí"]);
+    assert.equal(results[2].step, "ticket_confirm");
+    assert.match(results[2].reply, /Suministros[\s\S]*Epson L3250[\s\S]*cotizamos/);
+    assert.equal(results[3].route, "human");
+    assert.equal(fake.tickets[0].type, "suministros");
+  });
+
+  await test("'impresora de tinta continua' busca productos, no suministros; 'no funciona el link' no es servicio", async () => {
+    const product = (await conversation(fakeDeps(), ["busco impresora de tinta continua"]))[0];
+    assert.equal(product.decision, "R8:busqueda");
+    const link = (await conversation(fakeDeps(), ["no funciona el link de pago"]))[0];
+    assert.doesNotMatch(link.decision, /R10/);
+  });
+
+  await test("el catálogo completo es la última opción de la lista", async () => {
+    const results = await conversation(fakeDeps(), ["laptop", "3"]);
+    assert.match(results[0].reply, /\*3\.\* 📚 Ver el catálogo completo[\s\S]*\*asesor\*/);
+    assert.equal(results[1].decision, "R5:catalogo_completo");
+    assert.equal(results[1].state.cart.length, 0);
+  });
+
+  await test("precio referencial: catálogo primero, luego tabla de Ecuador", () => {
+    assert.equal(estimateService("impresora", "parpadean las luces").priceMax, 20);
+    assert.equal(estimateService("laptop", "se rompió la pantalla").priceMin, 60);
+    assert.equal(estimateService("camara", "quiero instalar 4 cámaras").label, "Instalación de cámaras (por cámara)");
+    const withCatalog = estimateService("impresora", "mantenimiento", [{ id: "s1", name: "Mantenimiento de impresora", price: 18, originalPrice: null, category: "Servicio técnico", kind: "service", description: "", specs: "" }]);
+    assert.equal(withCatalog.priceSource, "catalogo");
+    assert.equal(withCatalog.priceMin, 18);
   });
 
   await test("pedir asesor deriva con intencion dudas", async () => {

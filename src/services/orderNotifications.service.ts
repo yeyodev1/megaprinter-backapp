@@ -1,4 +1,6 @@
-import { escapeHtml, notifyNewOrder, sendEmail, storeRecipients } from "./email.service";
+import { escapeHtml, newOrderEmail, sendEmail, storeRecipients } from "./email.service";
+import { createAlert } from "./alerts.service";
+import { OrderModel } from "../models/order.model";
 
 /**
  * CORREOS DE CADA PEDIDO.
@@ -16,6 +18,31 @@ const payUrl = (order: any) => `${webUrl()}/pagar/${order.paymentToken}`;
 const money = (value: number) => `$${Number(value || 0).toFixed(2)}`;
 const firstName = (name: string) => escapeHtml(String(name || "").trim().split(/\s+/)[0] || "");
 const code = (order: any) => escapeHtml(order.orderNumber || String(order._id).slice(-6).toUpperCase());
+
+/**
+ * Envia y deja constancia en el pedido. Si falla: alerta en el panel y sigue
+ * (un correo caido nunca detiene una venta).
+ */
+function deliver(order: any, kind: string, to: string | string[], subject: string, html: string, replyTo?: string) {
+  void (async () => {
+    const recipients = Array.isArray(to) ? to.join(", ") : to;
+    const result = await sendEmail(to, subject, html, replyTo);
+    if (order?._id) {
+      await OrderModel.updateOne(
+        { _id: order._id },
+        { $push: { emailLog: { $each: [{ kind, to: recipients, ok: result.ok, error: result.error || "", at: new Date() }], $slice: -40 } } },
+      ).catch(() => {});
+    }
+    if (!result.ok) {
+      createAlert(
+        "email_failed",
+        `Correo no enviado: ${kind} · ${order?.orderNumber || ""}`.trim(),
+        `Para ${recipients}. El pedido sigue normal. Motivo: ${result.error || "desconocido"}`,
+        order?.orderNumber ? `/admin/orders?search=${encodeURIComponent(order.orderNumber)}` : "/admin/orders",
+      );
+    }
+  })();
+}
 
 function layout(title: string, body: string, cta?: { label: string; url: string }) {
   return `
@@ -58,7 +85,14 @@ const p = (text: string) => `<p style="margin:0 0 10px;font-size:15px;line-heigh
 
 /** Pedido recibido: al cliente (con lo que sigue) y al equipo. */
 export function notifyOrderCreated(order: any, channelLabel: string) {
-  void notifyNewOrder(order, channelLabel);
+  const store = newOrderEmail(order, channelLabel);
+  deliver(order, "Equipo: pedido nuevo", storeRecipients(), store.subject, store.html, order.customerEmail);
+  createAlert(
+    "order_new",
+    `Pedido nuevo ${order.orderNumber || ""} · $${Number(order.totalAmount || 0).toFixed(2)}`,
+    `${order.customerName} · ${channelLabel} · ${order.source === "payphone" ? "tarjeta" : order.source === "transfer" ? "transferencia" : "por coordinar"}`,
+    `/admin/orders?search=${encodeURIComponent(order.orderNumber || "")}`,
+  );
   if (!order.customerEmail) return;
 
   let next = "";
@@ -75,7 +109,9 @@ export function notifyOrderCreated(order: any, channelLabel: string) {
     next = p("Una persona de nuestro equipo te contacta para coordinar el pago y la entrega.");
   }
 
-  void sendEmail(
+  deliver(
+    order,
+    "Cliente: pedido recibido",
     order.customerEmail,
     `Recibimos tu pedido ${order.orderNumber || ""} 🎉`.trim(),
     layout(`Hola ${firstName(order.customerName)}, recibimos tu pedido ${code(order)}`, itemsTable(order) + next + p(`Puedes ver el estado de tu pedido cuando quieras en <a href="${trackingUrl(order)}">${webUrl()}/pedido</a> con tu correo o el código <strong>${code(order)}</strong>.`), cta),
@@ -124,15 +160,25 @@ const STATUS_COPY: Record<string, { subject: string; title: string; body: (order
 export function notifyStatusChange(order: any, status: string, by = "") {
   const copy = STATUS_COPY[status];
   if (copy && order.customerEmail) {
-    void sendEmail(
+    deliver(
+      order,
+      `Cliente: ${status}`,
       order.customerEmail,
       `${copy.subject} · ${order.orderNumber || "Megaprinter"}`,
       layout(`Hola ${firstName(order.customerName)}, ${copy.title.charAt(0).toLowerCase()}${copy.title.slice(1)}`, copy.body(order) + itemsTable(order), { label: "Ver mi pedido", url: trackingUrl(order) }),
     );
   }
   if (status === "paid") {
+    createAlert(
+      "payment_confirmed",
+      `💰 Pago confirmado ${order.orderNumber || ""} · $${Number(order.totalAmount || 0).toFixed(2)}`,
+      `${order.customerName}: prepara el pedido.`,
+      `/admin/orders?search=${encodeURIComponent(order.orderNumber || "")}`,
+    );
     const method = order.source === "payphone" ? "tarjeta (Payphone)" : order.source === "transfer" ? `transferencia${order.transfer?.account?.bank ? ` · ${order.transfer.account.bank}` : ""}` : order.source;
-    void sendEmail(
+    deliver(
+      order,
+      "Equipo: pago confirmado",
       storeRecipients(),
       `💰 Pago confirmado ${order.orderNumber || ""}: prepara el pedido`,
       layout(
@@ -150,7 +196,9 @@ export function notifyStatusChange(order: any, status: string, by = "") {
 /** Comprobante rechazado: el cliente sabe por qué y puede subir otro. */
 export function notifyTransferRejected(order: any, note: string) {
   if (!order.customerEmail) return;
-  void sendEmail(
+  deliver(
+    order,
+    "Cliente: comprobante rechazado",
     order.customerEmail,
     `Revisa tu comprobante · ${order.orderNumber || "Megaprinter"}`,
     layout(

@@ -3,6 +3,7 @@ import { UploadApiResponse } from "cloudinary";
 import cloudinary from "../config/cloudinary";
 import { geminiJson } from "./gemini.service";
 import { escapeHtml, sendStoreEmail } from "./email.service";
+import { createAlert } from "./alerts.service";
 import { PaymentSettingsModel } from "../models/paymentSettings.model";
 import { KNOWN_BANKS, bankLogo } from "./banks";
 
@@ -255,6 +256,12 @@ export async function attachReceipt(order: any, file: ReceiptFile, via: "whatsap
   order.set("transfer.status", "in_review");
   await order.save();
 
+  createAlert(
+    "receipt_review",
+    `🧾 Comprobante por revisar ${orderNumber} · $${order.totalAmount.toFixed(2)}`,
+    `${order.customerName} · por ${via === "whatsapp" ? "WhatsApp" : "la web"}${analysis?.summary ? ` · ${analysis.summary}` : ""}`,
+    "/admin/orders?transfer=in_review",
+  );
   const adminUrl = `${(process.env.PUBLIC_WEB_URL || "https://megaprinter.ec").replace(/\/$/, "")}/admin/orders?transfer=in_review`;
   void sendStoreEmail(
     `Comprobante por revisar ${orderNumber} - $${order.totalAmount.toFixed(2)}`,

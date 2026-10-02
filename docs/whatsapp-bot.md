@@ -181,6 +181,24 @@ Endpoints extra disponibles: `/search-order`, `/media` (alias `/transfer-receipt
 
 Simulación de 25 compras completas: `docs/simulacion-25-compras.md`.
 
+## Servicio técnico y suministros (tickets)
+
+- "servicio técnico", "no imprime", "mi laptop está lenta"… → Mila pide lo que falte (nombre, equipo,
+  problema), muestra un resumen con **precio referencial** y pregunta si lo registra.
+- Precio: primero los servicios cargados en el catálogo (tipo "servicio"); si no hay, tabla referencial
+  de Guayaquil/Ecuador (`serviceCatalog.ts`). Siempre aclara que el diagnóstico es sin costo y el técnico
+  confirma el precio.
+- "suministros", "tóner", "cartucho", "tinta para mi Epson" → solicitud de suministros (sin precio: se cotiza).
+- Con el **sí**, `/brain` devuelve `human`: se crea el ticket `ST-00001`, Mila dice "En breve un asesor
+  tomará el chat" y el flujo 🙋 Asesor humano silencia el bot. Alerta y correo al equipo.
+- Panel: **Servicio técnico** (`/admin/tickets`): estados, precio final, técnico asignado y notas.
+
+## Alertas del panel
+
+Campana arriba a la derecha (se actualiza cada 20 s): pedido nuevo, pago confirmado, comprobante por
+revisar, ticket nuevo, cliente que pidió un asesor y **correo que no se pudo enviar**. Un correo que
+falla nunca detiene nada: el pedido sigue, queda marcado en el detalle del pedido y sale la alerta.
+
 ## Correos y seguimiento del pedido
 
 | Momento | Cliente | Equipo (team@megaprinter.ec + EMAIL_TO) |

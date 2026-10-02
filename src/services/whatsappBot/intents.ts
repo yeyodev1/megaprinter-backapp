@@ -71,3 +71,11 @@ export const asksIfBot = (text: string) =>
 /** "pagado", "ya pagué", "listo, pagué", "ya hice el pago": dice que ya pagó. */
 export const claimsPaid = (text: string) =>
   has(text, /\b(pagado|ya pague|ya pagamos|listo pague|ya hice el pago|ya realice el pago|ya cancele|pago hecho|ya esta pagado|acabo de pagar)\b/);
+
+/** Quiere servicio tecnico: reparar, mantenimiento, formateo, algo que falla. */
+export const wantsService = (text: string) =>
+  has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico)\b/);
+
+/** Quiere suministros: tinta, toner, cartuchos, papel, repuestos. */
+export const wantsSupplies = (text: string) =>
+  has(text, /\b(suministro|suministros|tinta|tintas|toner|cartucho|cartuchos|botella de tinta|cinta|papel|repuesto|repuestos|consumible|consumibles)\b/);

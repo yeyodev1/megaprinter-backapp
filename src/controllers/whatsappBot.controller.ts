@@ -392,6 +392,7 @@ async function buildDeps(phone: string): Promise<BotDeps> {
         ...draft,
         channel: "whatsapp_bot",
         customerPhone: isLid(phone) ? "WhatsApp (número oculto)" : phone,
+        chatPhone: phone,
       });
       return { ticketNumber: ticket.ticketNumber || "" };
     },
@@ -497,8 +498,9 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
 
     // Voz de Mila con IA: el mismo contenido, dicho distinto cada vez (sin repetir
     // sus ultimos mensajes). Con BOT_AI_VOICE=off se envia la plantilla tal cual.
-    // El saludo va tal cual (texto acordado con el cliente).
-    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && result.decision !== "R9:saludo") {
+    // El saludo y el menu van tal cual (texto acordado con el cliente): la IA les
+    // metia "qué chévere verte por aquí" y ejemplos que el cliente no pidio.
+    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && !/^R9:(saludo|menu)/.test(result.decision)) {
       const lastBotMessages = history.filter((entry: any) => entry.role === "assistant").slice(-3).map((entry: any) => String(entry.content));
       result.reply = await naturalize(result.reply, lastBotMessages);
     }

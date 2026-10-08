@@ -217,7 +217,8 @@ Simulación de 25 compras completas: `docs/simulacion-25-compras.md`.
 - Precio: primero los servicios cargados en el catálogo (tipo "servicio"); si no hay, tabla referencial
   de Guayaquil/Ecuador (`serviceCatalog.ts`). Siempre aclara que el diagnóstico es sin costo y el técnico
   confirma el precio.
-- "suministros", "tóner", "cartucho", "tinta para mi Epson" → solicitud de suministros (sin precio: se cotiza).
+- "tinta", "tintas", "botella de tinta" (o la opción *6* del menú) → Mila muestra las tintas del catálogo (categoría con "tinta" o "suministro") con el link `/products?category=…`. Si nombra un modelo ("tinta 664", "tinta para L3250") muestra solo las que sirven; si el código no está ("748xxl") lo dice y ofrece *cotizar*, que registra la solicitud de suministros.
+- "tóner", "cartucho", repuestos, o *cotizar* con la lista de tintas → solicitud de suministros (sin precio: se cotiza).
 - Con el **sí**, `/brain` devuelve `human`: se crea el ticket `ST-00001`, Mila dice "En breve un asesor
   tomará el chat" y el flujo 🙋 Asesor humano silencia el bot. Alerta y correo al equipo.
 - Panel: **Servicio técnico** (`/admin/tickets`): estados, precio final, técnico asignado y notas.
@@ -260,3 +261,11 @@ Para probar contra la API: `reiniciatodo` borra la conversación del teléfono.
 - Tomar el carrito de otro teléfono si no llega el propio (fuga de datos).
 - Datos bancarios escritos en el código → ahora se editan desde el panel (Sistema → Pagos).
 - Mensajes proactivos por WhatsApp (violan la política de Meta).
+
+### Resumen con IA y tablero
+
+Al crear un ticket, Gemini lee la conversación y guarda `summary` (qué busca, qué quiere, clasificación
+`servicio_tecnico | suministros | compra | seguimiento | no_claro`). Si no sabe clasificarlo o pide revisión,
+el ticket pasa de "nuevo" a **"Necesita atención"** (`atencion`). El panel /admin/tickets es un tablero de
+izquierda a derecha por estado (se arrastran las tarjetas); si un ticket no tiene resumen, se genera al abrirlo
+(`POST /api/tickets/:id/summary`). El saludo y el menú (`R9:saludo*`, `R9:menu`) no pasan por la voz con IA.

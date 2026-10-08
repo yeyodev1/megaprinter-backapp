@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { AdminRequest } from "../middlewares/admin.middleware";
 import { TICKET_STATUSES, ServiceTicketModel } from "../models/serviceTicket.model";
 import { AlertModel } from "../models/alert.model";
+import { summarizeTicket } from "../services/tickets.service";
 
 /** GET /api/tickets?status=&type= */
 export async function listTickets(req: Request, res: Response, next: NextFunction) {
@@ -37,6 +38,18 @@ export async function updateTicket(req: AdminRequest, res: Response, next: NextF
     }
     if (typeof assignedTo === "string") ticket.assignedTo = assignedTo.trim().slice(0, 120);
     await ticket.save();
+    res.json(ticket);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** POST /api/tickets/:id/summary — (re)genera el resumen con IA. */
+export async function summarizeTicketHandler(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!(await ServiceTicketModel.exists({ _id: req.params.id }))) return res.status(404).json({ error: "Ticket no encontrado" });
+    const ticket = await summarizeTicket(String(req.params.id));
+    if (!ticket) return res.status(503).json({ error: "La IA no respondió. Intenta de nuevo en un momento." });
     res.json(ticket);
   } catch (error) {
     next(error);

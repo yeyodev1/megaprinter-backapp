@@ -2,7 +2,7 @@ import { Schema, model } from "mongoose";
 import { nextSequence } from "./counter.model";
 
 export const TICKET_TYPES = ["servicio_tecnico", "suministros"] as const;
-export const TICKET_STATUSES = ["nuevo", "en_revision", "cotizado", "en_reparacion", "listo", "entregado", "cancelado"] as const;
+export const TICKET_STATUSES = ["atencion", "nuevo", "en_revision", "cotizado", "en_reparacion", "listo", "entregado", "cancelado"] as const;
 
 /** Solicitud de servicio tecnico o de suministros: la atiende una persona. */
 const serviceTicketSchema = new Schema(
@@ -14,6 +14,8 @@ const serviceTicketSchema = new Schema(
     customerName: { type: String, default: "", trim: true },
     customerPhone: { type: String, default: "", trim: true },
     customerEmail: { type: String, default: "", trim: true, lowercase: true },
+    // Telefono de la sesion del bot (con LID el customerPhone dice "numero oculto").
+    chatPhone: { type: String, default: "" },
     // Equipo (impresora, laptop, pc, monitor, camara) y lo que le pasa, con las palabras del cliente.
     device: { type: String, default: "" },
     issue: { type: String, default: "" },
@@ -22,6 +24,16 @@ const serviceTicketSchema = new Schema(
     priceMin: { type: Number, default: null },
     priceMax: { type: Number, default: null },
     priceSource: { type: String, enum: ["catalogo", "referencial", "por_cotizar"], default: "por_cotizar" },
+    // Resumen con IA de la conversacion: que busca, que quiere y como se clasifica.
+    // "no_claro" o needsAttention mandan el ticket a la columna "Necesita atencion".
+    summary: {
+      text: { type: String, default: "" },
+      wants: { type: String, default: "" },
+      classification: { type: String, enum: ["servicio_tecnico", "suministros", "compra", "seguimiento", "no_claro", ""], default: "" },
+      needsAttention: { type: Boolean, default: false },
+      reason: { type: String, default: "" },
+      at: { type: Date, default: null },
+    },
     // Lo que define el equipo despues del diagnostico.
     finalPrice: { type: Number, default: null },
     assignedTo: { type: String, default: "" },

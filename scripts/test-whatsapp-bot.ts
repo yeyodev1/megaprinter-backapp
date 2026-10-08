@@ -240,7 +240,7 @@ async function main() {
     const fake = fakeDeps({ banks: FOUR_BANKS });
     const results = await conversation(fake, ["hola", "monitor", "1", "Eva Ruiz", "eva@mail.com", "Quito", "transferencia", "2", "no", "si", "si"]);
     for (const result of results) assert.doesNotMatch(result.reply, /[¿¡]/, result.decision);
-    assert.match(results[0].reply, /^Hola! Soy \*Mila\* 🤖, la bot de \*Megaprinter\* y tu agente para lo que necesites\. Aquí estoy para ayudarte siempre![\s\S]*Servicio técnico[\s\S]*Suministros/);
+    assert.match(results[0].reply, /^Hola! Te saluda \*Mila\* 🤖, el chatbot de \*Megaprinter\* y tu agente para lo que necesites\. Aquí estoy para ayudarte siempre![\s\S]*Servicio técnico[\s\S]*Suministros/);
   });
 
   await test("transparencia: si preguntan si es un bot, dice que sí", async () => {
@@ -420,6 +420,33 @@ async function main() {
     assert.match(results[2].reply, /Suministros[\s\S]*Epson L3250[\s\S]*cotizamos/);
     assert.equal(results[3].route, "human");
     assert.equal(fake.tickets[0].type, "suministros");
+  });
+
+  await test("tintas: ofrece las del catálogo con link y 'cotizar' registra la que no está", async () => {
+    const INKS: BotProduct[] = [
+      ...CATALOG,
+      { id: "t1", name: "Tintas 544", price: 38, originalPrice: 40, category: "Tintas Originales", kind: "product", description: "Para Epson EcoTank L1110, L3210, L3250", specs: "Contenido: 65 ml" },
+      { id: "t2", name: "Tintas 664", price: 33, originalPrice: 35, category: "Tintas Originales", kind: "product", description: "Para Epson L210, L355, L380", specs: "Contenido: 70 ml" },
+    ];
+    const fake = fakeDeps();
+    fake.deps.loadCatalog = async () => INKS;
+    const all = (await conversation(fake, ["necesito tinta"]))[0];
+    assert.equal(all.decision, "R10:tintas");
+    assert.match(all.reply, /Tintas 664[\s\S]*Tintas 544[\s\S]*\/products\?category=tintas-originales[\s\S]*\*cotizar\*/);
+    const exact = (await conversation(fake, ["tinta para mi L3250"]))[0];
+    assert.match(exact.reply, /Sí tenemos[\s\S]*Tintas 544/);
+    assert.doesNotMatch(exact.reply, /Tintas 664/);
+    const real = await conversation(fake, ["Tenia una tinta cyan por retirar 748xxl", "cotizar", "Zuleika Wan", "sí"]);
+    assert.match(real[0].reply, /No tengo la \*748XXL\*[\s\S]*Tintas 544/);
+    assert.equal(real[1].step, "ticket_name");
+    assert.equal(real[2].step, "ticket_confirm");
+    assert.match(real[2].reply, /748xxl/);
+    assert.equal(fake.tickets[0].type, "suministros");
+    const pick = await conversation(fake, ["hola", "6", "2"]);
+    assert.equal(pick[1].decision, "R10:menu_tintas");
+    assert.equal(pick[2].state.ticket.type, "", "elegir una tinta deja la solicitud");
+    const toner = (await conversation(fake, ["necesito toner para HP 85A"]))[0];
+    assert.equal(toner.decision, "R10:suministros", "tóner se cotiza");
   });
 
   await test("'impresora de tinta continua' busca productos, no suministros; 'no funciona el link' no es servicio", async () => {

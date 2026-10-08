@@ -5,6 +5,7 @@ import { BotProduct, catalogOverview, money, normalize, productLine, searchProdu
 import { Extraction, Extractor } from "./extractor";
 import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash } from "./intents";
 import { STORE, storeInfoText } from "./store";
+import { slugify } from "../../utils/slugify";
 
 /**
  * MAQUINA DE ESTADOS DEL BOT DE WHATSAPP.
@@ -232,7 +233,8 @@ export const MENU = [
   { key: "asesor", label: "🙋 Hablar con un asesor" },
 ] as const;
 const MENU_LIST = MENU.map((item, index) => `*${index + 1}.* ${item.label}`).join("\n");
-const ASK_PRODUCT = `Qué necesitas hoy? Elige una opción 👇\n\n${MENU_LIST}\n\nRespóndeme con el número, o escríbeme lo que buscas o mándame una foto 📸`;
+// Pedido del cliente (oct-2026): que el cliente diga si busca un producto, un servicio o el catalogo.
+const ASK_PRODUCT = `Indícame en qué producto o servicio estás interesado 👇\n\n${MENU_LIST}\n\nRespóndeme con el número de la opción 😊 También puedes mandarme una foto de lo que buscas 📸`;
 
 export const FALLBACK_MESSAGE = ASK_PRODUCT;
 
@@ -434,10 +436,10 @@ function toHuman(state: BotState, text: string, decision: string): TurnResult {
 /** Saludo: completo la primera vez del dia; despues, corto (no repetir la presentacion). */
 function greet(state: BotState): TurnResult {
   if (within(state.greetedAt, GREETING_MS)) {
-    return reply(state, `Hola de nuevo 👋 ${ASK_PRODUCT}`, "R9:saludo_corto");
+    return reply(state, `Hola de nuevo 👋 Te saluda *${botName()}* 🤖, el chatbot de *Megaprinter*.\n\n${ASK_PRODUCT}`, "R9:saludo_corto");
   }
   state.greetedAt = new Date().toISOString();
-  return reply(state, `Hola! Soy *${botName()}* 🤖, la bot de *Megaprinter* y tu agente para lo que necesites. Aquí estoy para ayudarte siempre!\n\n${ASK_PRODUCT}`, "R9:saludo");
+  return reply(state, `Hola! Te saluda *${botName()}* 🤖, el chatbot de *Megaprinter* y tu agente para lo que necesites. Aquí estoy para ayudarte siempre!\n\n${ASK_PRODUCT}`, "R9:saludo");
 }
 
 /** Respuesta y, si hay un pedido a medias, la pregunta del paso pendiente. */
@@ -470,13 +472,49 @@ function askNext(state: BotState, deps: BotDeps, decision: string, prefix = ""):
   return reply(state, join(questionFor(state.stage, deps)), decision);
 }
 
-function showOptions(state: BotState, products: BotProduct[], decision: string, intro?: string): TurnResult {
+function showOptions(state: BotState, products: BotProduct[], decision: string, intro?: string, outro = "", keepTicket = false): TurnResult {
   state.options = products.map(toOption);
   state.stage = "choosing";
+  // Solo la lista de tintas guarda la solicitud de suministros (para "cotizar" otra).
+  if (!keepTicket) state.ticket = createInitialState().ticket;
   // El catalogo completo es una opcion mas de la lista.
   const list = [...products.map((product, index) => productLine(product, index + 1)), `*${products.length + 1}.* 📚 Ver el catálogo completo`].join("\n");
   const ask = `${products.length === 1 ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*" : "Cuál te agrego? 🛒 Respóndeme con el número"}\nSi prefieres hablar con una persona, escribe *asesor* 🙋`;
-  return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}`, decision);
+  return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}${outro ? `\n\n${outro}` : ""}`, decision);
+}
+
+// ─── Tintas del catalogo ────────────────────────────────────────────────────
+
+const isInk = (product: BotProduct) =>
+  product.kind !== "service" && (/\b(tintas?|suministros?)\b/.test(normalize(product.category)) || /^tintas?\b/.test(normalize(product.name)));
+
+/** Pide tinta o botellas (no toner, cartuchos, papel ni repuestos, que se cotizan). */
+const asksInk = (normalized: string) =>
+  /\b(tintas?|botellas?|suministros?)\b/.test(normalized) && !/\b(toner|cartuchos?|papel|cinta|repuestos?|consumibles?)\b/.test(normalized) && !PARTS.test(normalized);
+
+/**
+ * Antes cualquier "tinta" iba directo a un ticket "por cotizar" aunque hubiera
+ * tintas en stock (ST-00009, oct-2026). Ahora se ofrecen las del catalogo y,
+ * si no esta la que busca, escribe *cotizar* y se registra la solicitud.
+ */
+async function offerInks(state: BotState, deps: BotDeps, message: string, decision: string): Promise<TurnResult | null> {
+  const inks = (await deps.loadCatalog()).filter(isInk).sort((a, b) => a.price - b.price);
+  if (!inks.length) return null;
+  const matches = message ? searchProducts(inks, message, 8) : [];
+  // Codigo que nombro el cliente ("748xxl", "T544") y no esta en ninguna tinta.
+  const missing = normalize(message)
+    .split(" ")
+    .find((word) => /\d/.test(word) && word.length >= 3 && !inks.some((ink) => normalize(`${ink.name} ${ink.specs} ${ink.description}`).includes(word)));
+  const exact = matches.length > 0 && matches.length < inks.length;
+  const intro = exact
+    ? "Sí tenemos! 🧴 Estas tintas originales te sirven 👇"
+    : missing
+      ? `No tengo la *${missing.toUpperCase()}* en el catálogo 🙈 Estas son las tintas originales que sí tenemos en stock 👇`
+      : "Estas son las tintas originales que tenemos en stock 🧴👇";
+  startTicket(state, "suministros", message);
+  const link = `${deps.storeUrl}/products?category=${slugify(inks[0].category)}`;
+  const outro = `Míralas con foto y compatibilidad aquí 👉 ${link}\nSi necesitas otra (otro modelo, tóner o cartucho), escríbeme *cotizar* y un asesor te la consigue 📝`;
+  return showOptions(state, exact ? matches : inks.slice(0, 8), decision, intro, outro, true);
 }
 
 /** Respuesta segun lo que dijo Payphone del pago con tarjeta ("pagado" o captura del pago). */
@@ -787,6 +825,10 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     if (item.key === "asesor") {
       return toHuman(state, "De una! Te paso con una persona del equipo de Megaprinter 🙌 En breve te escribe por aquí 💙", "R2:menu_asesor");
     }
+    if (item.key === "suministros") {
+      const inks = await offerInks(state, deps, "", "R10:menu_tintas");
+      if (inks) return inks;
+    }
     if (item.key === "servicio" || item.key === "suministros") {
       startTicket(state, item.key === "servicio" ? "servicio_tecnico" : "suministros", "");
       return askTicketNext(state, deps, item.key === "servicio" ? "R10:menu_servicio" : "R10:menu_suministros", item.key === "servicio" ? "Claro! Te ayudo con el servicio técnico 🛠️" : "Claro! Te ayudo con los suministros 🧴");
@@ -856,6 +898,19 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   // "impresora de tinta continua" es un producto; "tinta para mi Epson" o "toner" son suministros.
   const explicitSupplies = /\b(suministros?|toner|cartuchos?|botellas?|repuestos?|consumibles?)\b/.test(normalized) || PARTS.test(normalized);
   const suppliesAsked = !serviceAsked && wantsSupplies(message) && state.stage !== "choosing" && (explicitSupplies || !/\b(impresoras?|multifuncion|laptop|monitor|camara)\b/.test(normalized));
+  if (suppliesAsked && asksInk(normalized)) {
+    const inks = await offerInks(state, deps, message, "R10:tintas");
+    if (inks) return inks;
+  }
+  // Con la lista de tintas a la vista: "cotizar", "ninguna" u otro suministro registran la solicitud.
+  if (state.stage === "choosing" && state.ticket.type === "suministros" && !extractChoice(message, state.options.length + 1)) {
+    const quote = /\b(cotiza\w*|ninguna|ninguno|no esta|no es esa|otra tinta|otro modelo)\b/.test(normalized);
+    if (quote || (wantsSupplies(message) && !asksInk(normalized))) {
+      state.options = [];
+      if (describesProblem(message) && !/^(cotizar|cotizala|cotizamela|ninguna|ninguno)$/.test(normalized)) state.ticket.issue = message.trim().slice(0, 500);
+      return askTicketNext(state, deps, "R10:tintas_cotizar", "Dale! Te lo cotizamos 📝");
+    }
+  }
   if (serviceAsked || suppliesAsked) {
     startTicket(state, serviceAsked ? "servicio_tecnico" : "suministros", message);
     const intro = serviceAsked ? "Claro! Te ayudo con el servicio técnico 🛠️" : "Claro! Te ayudo con los suministros 🧴";
@@ -918,6 +973,8 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
 
   // R5: eleccion entre las opciones mostradas ("2", "la segunda", "sí" con una sola opcion).
   if (state.stage === "choosing" && state.options.length) {
+    // Eligio de la lista (p. ej. una tinta): ya no hay solicitud de suministros pendiente.
+    if (extractChoice(message, state.options.length + 1) || isYes(message)) state.ticket = createInitialState().ticket;
     if (extractChoice(message, state.options.length + 1) === state.options.length + 1) {
       const catalogItems = await deps.loadCatalog();
       state.options = [];

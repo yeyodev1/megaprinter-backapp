@@ -142,12 +142,41 @@ Rules de 🧠 Principal:
 |---|---|---|
 | `conversation` | 💬 Conversación | Charla, búsqueda, datos, consultas de pedido, "eres un bot?" |
 | `catalog` | 📚 Catálogo | Pide el catálogo |
-| `checkoutCard` | 💳 Checkout tarjeta | "sí" al resumen con tarjeta |
-| `checkoutTransfer` | 🏦 Checkout transferencia | "sí" al resumen con transferencia, o llega una foto |
-| `human` | 🙋 Asesor humano | Pide un asesor, reclamo o garantía |
+| `checkoutCard` | 💳 Checkout tarjeta | "sí" al resumen, **con tarjeta o con transferencia** (los dos llaman a `/checkout`) |
+| `checkoutTransfer` | 🏦 Checkout transferencia | Solo cuando llega una foto o PDF |
+| `human` | 🙋 Asesor humano | Pide un asesor, reclamo o garantía; acepta el asesor que ofreció Mila; sigue un caso del taller ("me confirma", "alguna novedad", "dejé mi laptop"); quiere pagar en efectivo |
+
+> Oct-2026: el "sí" por transferencia iba a 🏦 Checkout transferencia, que tiene el evento IMAGEN O VÍDEO,
+> y la Rule de texto nunca llamaba a `/checkout`: el cliente no recibía la cuenta y el pedido no se creaba.
+> Por eso ahora va a 💳 Checkout tarjeta.
 
 Nunca una Rule hacia el mismo flujo (bucle). Los flujos destino no llevan Rules.
 Endpoints extra disponibles: `/search-order`, `/media` (alias `/transfer-receipt`).
+
+## Menú principal y aviso del asesor
+
+El saludo muestra un menú numerado: *1* Impresoras · *2* Laptops y computadoras · *3* Monitores · *4* Cámaras ·
+*5* Servicio técnico · *6* Suministros · *7* Catálogo · *8* Hablar con un asesor. Con el menú a la vista, el número
+elige (las categorías muestran los productos de menor a mayor precio); "menú" lo vuelve a mostrar. El cliente
+también puede escribir lo que busca o mandar una foto.
+
+Cuando un cliente pasa a un asesor (opción 8, "asesor", ticket creado, seguimiento de un caso), además de la alerta
+del panel sale un **correo inmediato** a `HANDOFF_EMAIL` (separados por coma; si no está, a team@megaprinter.ec +
+`EMAIL_TO`) con el link `wa.me` del cliente y los últimos 10 mensajes. No se repite si ya se avisó en los últimos 30 min.
+
+## Mejoras tras revisar los chats reales (oct-2026)
+
+Se revisaron ~45 conversaciones de producción (`pnpm bot:logs -- --limit 5000`). Cambios, cada uno con prueba en `pnpm test:bot`:
+
+- **Tienda y horarios** con datos fijos (`store.ts`, iguales a `brand.ts` del front). La IA había dicho "dos sucursales en Quito" y un Instagram equivocado; ahora recibe los datos reales y no puede inventar IVA, envíos, garantías ni tiempos de reparación.
+- **Seguimiento de casos** (equipo en el taller, "me confirma amiga", "alguna novedad", "Código 1112", foto de una orden de ingreso, comprobante sin pedido) → pasa a una persona, en vez de repetir el menú.
+- **"Sí" a "te paso con un asesor?"** ahora sí pasa al asesor. Tras el traspaso, "ok"/"sí"/"gracias" responden "ya le avisé al equipo" (1 h) en vez de saludar de nuevo.
+- **Saludo largo una vez cada 12 h**; después, uno corto. "Buen día" se reconoce como saludo. Relleno ("Mmm, entiendo. Continúa.", "ok deme un momento") recibe una respuesta corta.
+- **Servicio técnico**: "la revisión tiene precio?" responde que el diagnóstico es sin costo y da el rango. En el resumen del ticket, "no" / "cambio de tema" / "solo es una consulta" cancelan, y un mensaje que no cuenta un problema (p. ej. el precio de una impresora) sale del ticket en vez de pegarse a la descripción.
+- **Repuestos** (cabezal, encoder, cargador, adaptador, batería, parlantes) se cotizan como suministros.
+- **Checkout**: "efectivo" pasa a una persona; "primero voy a averiguar" ya no se guarda como dirección; "no me ha llegado la información" no se toma como "no" al resumen; "ya pagueee" verifica el pago.
+- **Elección**: "Epson" con la lista a la vista elige entre las opciones mostradas (antes agregó otro modelo). "Me quedo con la opción 1" sin opciones en el chat (se las dio un asesor) pasa a una persona.
+- **IA**: preguntar precio o disponibilidad ya no agrega al carrito; nunca dice "solo vendemos X".
 
 ## Variables de entorno
 

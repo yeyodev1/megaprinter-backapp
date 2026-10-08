@@ -1,6 +1,7 @@
 import { geminiJson } from "../gemini.service";
 import { BotProduct, money, normalize } from "./catalog";
 import { detectPaymentMethod, extractEmail, isGreeting, wantsCatalog, wantsHuman, wantsTracking } from "./intents";
+import { storeFactsForPrompt } from "./store";
 
 /**
  * EXTRACCION DEL MENSAJE.
@@ -87,11 +88,11 @@ intent (uno):
 - "humano": pide un asesor, reclama, garantía o algo que el bot no puede resolver.
 - "dato": solo responde un dato que el bot pidió (nombre, correo, dirección, forma de pago, sí/no).
 - "saludo": solo saluda.
-- "fuera_de_tema": pide algo que NO es de Megaprinter (tareas, recetas, chistes, política, programación, traducciones, consejos generales, escribir textos, otras tiendas). Política de Meta: este bot SOLO atiende ventas y soporte de Megaprinter; nunca respondas eso.
+- "fuera_de_tema": pide algo que NO es de Megaprinter (tareas, recetas, chistes, política, programación, traducciones, consejos generales, escribir textos, otras tiendas). Política de Meta: este bot SOLO atiende ventas y soporte de Megaprinter; nunca respondas eso. Repuestos, accesorios, drivers, instalación de un equipo, números sueltos o códigos NO son fuera_de_tema (usa "pregunta" o "humano").
 - "otro": nada de lo anterior.
 
 Campos:
-- items: SOLO si el cliente identifica un producto concreto (por nombre, modelo o porque responde a opciones que el bot mostró) Y quiere comprarlo. ref = número del catálogo. Si hay varios que encajan, NO elijas: deja items vacío y usa suggestions.
+- items: SOLO si el cliente identifica un producto concreto (por nombre, modelo o porque responde a opciones que el bot mostró) Y dice que lo quiere comprar ("dame esa", "quiero la L3250", "la segunda"). Preguntar precio o disponibilidad ("tiene la brother sp-1?", "precio de la L4360", "deseo información de…") NO es comprar: intent "pregunta" con ese producto en suggestions. ref = número del catálogo. Si hay varios que encajan, NO elijas: deja items vacío y usa suggestions.
 - remove: refs de productos del carrito que quiere quitar.
 - searchQuery: lo que busca con sus palabras, si describe un producto sin identificarlo ("laptop i7 16gb", "impresora de tinta continua").
 - suggestions: hasta 5 refs del catálogo que mejor responden a lo que busca o pregunta, del más adecuado al menos.
@@ -99,6 +100,9 @@ Campos:
 - address: dirección de entrega con ciudad, o "Retiro en tienda" si quiere retirar.
 - paymentMethod: "card" (tarjeta, link de pago, Payphone) o "transfer" (transferencia, depósito). null si no lo dice.
 - answer: SOLO con intent "pregunta". Hablas como Mila, el bot de Megaprinter (nunca digas que eres una persona): voz femenina, cercana, siempre amigable y con ganas de ayudar, nada formal, tuteas, usas 2 o 3 emojis. Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡"). Máximo 2 frases (un párrafo, sin listas ni viñetas), español de Ecuador. Puedes usar *negrita* de WhatsApp (asterisco al inicio y al final de la palabra). Basado EXCLUSIVAMENTE en el catálogo. Si devuelves suggestions, NO enumeres esos productos en answer: el sistema los muestra numerados debajo; solo explica el criterio (ej. "Para diseño te conviene un Core i7 o Ryzen 7 con 16 GB de RAM; estas son las mejores opciones:"). Si mencionas un precio, exacto del catálogo en formato $1234.56. Si el dato no está en el catálogo, dilo y ofrece pasar con un asesor. No pidas datos personales en answer.
+  · Datos de la tienda (úsalos tal cual, NUNCA inventes otras sucursales, ciudades ni redes): ${storeFactsForPrompt()}
+  · NO inventes políticas: IVA, costo o tiempo de envío, garantía, diferidos, tiempos de reparación y stock de lo que no está en el catálogo los confirma un asesor. Sí se hacen envíos a otras ciudades de Ecuador (el costo lo confirma el equipo).
+  · Si algo no está en el catálogo (repuestos, cargadores, cabezales, parlantes, otro modelo), di que no lo tienes en el catálogo y que un asesor puede cotizarlo. Nunca digas "solo vendemos X": vendemos laptops, all in one, monitores, impresoras, cámaras, tintas y suministros, y hacemos servicio técnico.
 - Usa la pregunta anterior del bot y el historial para interpretar respuestas cortas ("la segunda", "esa", "sí").
 - Todo lo que no aplique va null, "" o [].`;
 

@@ -8,6 +8,7 @@ import { geminiEnabled } from "../services/gemini.service";
 import { settleCardPayment } from "../services/payphone.service";
 import { createServiceTicket } from "../services/tickets.service";
 import { createAlert } from "../services/alerts.service";
+import { escapeHtml, sendEmail, storeRecipients } from "../services/email.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
 import { naturalize } from "../services/whatsappBot/voice";
 import { claimsPaid } from "../services/whatsappBot/intents";
@@ -617,6 +618,35 @@ export async function whatsappBotDecide(req: Request, res: Response) {
 }
 
 /**
+ * Aviso por correo a quien atiende los chats (HANDOFF_EMAIL, separados por coma;
+ * si no existe, al equipo) cuando un cliente pasa a un asesor. Lleva el link de
+ * WhatsApp y los ultimos mensajes para responder sin buscar. Nunca bloquea.
+ */
+async function notifyHandoff(phone: string, result: TurnResult, message: string) {
+  try {
+    const to = (process.env.HANDOFF_EMAIL || "").split(",").map((value) => value.trim()).filter(Boolean);
+    const session: any = await WhatsAppSessionModel.findOne({ phone }, { history: 1 }).lean();
+    const lines = (session?.history || [])
+      .slice(-10)
+      .map((entry: any) => `<p style="margin:4px 0"><b>${entry.role === "user" ? "👤 Cliente" : "🤖 Mila"}:</b> ${escapeHtml(String(entry.content).slice(0, 500)).replace(/\n/g, "<br>")}</p>`)
+      .join("");
+    const name = result.state.customerName || "Un cliente";
+    const digits = phone.replace(/\D/g, "");
+    const ticket = result.decision === "R10:ticket_creado" ? " (ticket de servicio)" : "";
+    const html = `<h2>🙋 ${escapeHtml(name)} necesita hablar con una persona${ticket}</h2>
+<p><b>Teléfono:</b> ${escapeHtml(phone)} · <a href="https://wa.me/${digits}">Abrir chat en WhatsApp</a></p>
+<p><b>Último mensaje:</b> "${escapeHtml(message.slice(0, 300))}"</p>
+<p>Mila ya le dijo que en breve le escriben por aquí. Respóndele desde BuilderBot (el bot queda en silencio en ese chat).</p>
+<h3>Conversación reciente</h3>${lines}
+<p><a href="https://megaprinter.ec/admin/bot?phone=${encodeURIComponent(phone)}">Ver en el panel</a></p>`;
+    const sent = await sendEmail(to.length ? to : storeRecipients(), `🙋 ${name} quiere hablar con un asesor (${phone})`, html);
+    if (!sent.ok) createAlert("email_failed", "No se pudo avisar por correo de un cliente que pidió asesor", `${phone}: ${sent.error || ""}`, `/admin/bot?phone=${encodeURIComponent(phone)}`);
+  } catch (error) {
+    console.error("[bot] no se pudo avisar del asesor:", error);
+  }
+}
+
+/**
  * Endpoints de los flujos destino (/conversation, /checkout, /catalog,
  * /search-order, /human). Todos procesan el mensaje completo y responden en
  * `message`: el turno es la unica fuente de verdad, la ruta solo elige la puerta.
@@ -640,6 +670,8 @@ export async function whatsappBotTurn(req: Request, res: Response) {
           `/admin/bot?phone=${encodeURIComponent(phone)}`,
         );
       }
+      // Correo inmediato a quien atiende (Marilexi) con el link del chat. Tambien con tickets.
+      if (result.route === "human" && result.notifyTeam && !(result as any).duplicated) await notifyHandoff(phone, result, message);
       console.log(
         `[bot] ${phone} /${endpoint} → ${result.route} ${result.decision} paso=${result.step}${result.orderNumber ? ` ${result.orderNumber}` : ""} ${Date.now() - startedAt}ms | 👤 ${oneLine(message)} | 🤖 ${oneLine(result.reply)}`,
       );

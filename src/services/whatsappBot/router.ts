@@ -3,7 +3,8 @@ import { detectBank } from "../banks";
 import { DEVICES, ServiceEstimate, detectDevice, deviceEmoji, deviceLabel, estimateService, priceText } from "./serviceCatalog";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash } from "./intents";
+import { STORE, storeInfoText } from "./store";
 
 /**
  * MAQUINA DE ESTADOS DEL BOT DE WHATSAPP.
@@ -45,6 +46,14 @@ export interface BotState {
   orderId: string;
   orderNumber: string;
   lastQuestion: string;
+  /** Cuando paso el chat a un asesor (ISO). Mientras dure, "ok"/"sí" no reinician la charla. */
+  handoffAt: string;
+  /** Ultimo saludo largo (ISO): el segundo saludo del dia va corto. */
+  greetedAt: string;
+  /** La ultima respuesta ofrecio pasar con un asesor: un "sí" ahora es aceptarlo. */
+  offeredHuman: boolean;
+  /** La ultima respuesta mostro el menu principal numerado. */
+  menuShown: boolean;
 }
 
 export const createInitialState = (): BotState => ({
@@ -61,7 +70,15 @@ export const createInitialState = (): BotState => ({
   orderId: "",
   orderNumber: "",
   lastQuestion: "",
+  handoffAt: "",
+  greetedAt: "",
+  offeredHuman: false,
+  menuShown: false,
 });
+
+const HANDOFF_MS = 60 * 60 * 1000;
+const GREETING_MS = 12 * 60 * 60 * 1000;
+const within = (iso: string, ms: number) => Boolean(iso) && Date.now() - Date.parse(iso) < ms;
 
 /** Intencion para las Rules de BuilderBot. */
 export type Intent = "conversar" | "menu" | "dudas" | "consultar_pedido" | "orden_creada" | "comprobante_recibido";
@@ -95,6 +112,8 @@ export interface TurnResult {
   paymentLink?: string;
   paymentMethod?: "card" | "transfer" | null;
   total?: number;
+  /** Paso nuevo a un asesor: avisar al equipo (correo). No se repite si ya se aviso hace poco. */
+  notifyTeam?: boolean;
 }
 
 export interface TurnInput {
@@ -198,7 +217,22 @@ function questionFor(stage: Stage, deps: BotDeps) {
 
 const chosenBank = (state: BotState, deps: BotDeps) => deps.banks.find((account) => account.id === state.bankId) || null;
 
-const ASK_PRODUCT = "Cuéntame qué buscas hoy 💻🖨️ Puedes escribirme algo como \"laptop i7 16GB\" o \"impresora de tinta continua\", pedirme *servicio técnico* 🛠️ o *suministros* 🧴, mandarme una foto 📸 o pedirme el *catálogo* 📚";
+/**
+ * Menu principal numerado: el cliente elige con el numero (pedido del cliente,
+ * oct-2026: "cuentame que buscas" sin opciones no guiaba a nadie).
+ */
+export const MENU = [
+  { key: "impresoras", label: "🖨️ Impresoras", categories: /impresora/ },
+  { key: "laptops", label: "💻 Laptops y computadoras", categories: /laptop|all in one/ },
+  { key: "monitores", label: "🖥️ Monitores", categories: /monitor/ },
+  { key: "camaras", label: "📹 Cámaras de seguridad", categories: /camara/ },
+  { key: "servicio", label: "🛠️ Servicio técnico" },
+  { key: "suministros", label: "🧴 Suministros (tintas, tóner, repuestos)" },
+  { key: "catalogo", label: "📚 Ver el catálogo completo" },
+  { key: "asesor", label: "🙋 Hablar con un asesor" },
+] as const;
+const MENU_LIST = MENU.map((item, index) => `*${index + 1}.* ${item.label}`).join("\n");
+const ASK_PRODUCT = `Qué necesitas hoy? Elige una opción 👇\n\n${MENU_LIST}\n\nRespóndeme con el número, o escríbeme lo que buscas o mándame una foto 📸`;
 
 export const FALLBACK_MESSAGE = ASK_PRODUCT;
 
@@ -383,7 +417,48 @@ export const casualMarks = (text: string) => text.replace(/[¿¡]/g, "");
 function reply(state: BotState, rawText: string, decision: string, extra: Partial<TurnResult> = {}): TurnResult {
   const text = casualMarks(rawText);
   state.lastQuestion = text.slice(-300);
+  // Con el menu a la vista, "1"…"8" elige una opcion del menu.
+  state.menuShown = text.includes(MENU_LIST);
+  // "Quieres que te pase con un asesor?" -> el "sí" siguiente lo acepta.
+  state.offeredHuman = extra.route !== "human" && /(asesor|una persona|un humano|te (conecto|paso))[^?]*\?\s*\S{0,6}\s*$/i.test(text);
   return { state, reply: text, route: "conversation", intent: "conversar", step: state.stage, decision, ...extra };
+}
+
+/** Pasa el chat a una persona (el flujo de BuilderBot silencia al bot). */
+function toHuman(state: BotState, text: string, decision: string): TurnResult {
+  const notifyTeam = !within(state.handoffAt, 30 * 60 * 1000);
+  state.handoffAt = new Date().toISOString();
+  return reply(state, text, decision, { intent: "dudas", route: "human", notifyTeam });
+}
+
+/** Saludo: completo la primera vez del dia; despues, corto (no repetir la presentacion). */
+function greet(state: BotState): TurnResult {
+  if (within(state.greetedAt, GREETING_MS)) {
+    return reply(state, `Hola de nuevo 👋 ${ASK_PRODUCT}`, "R9:saludo_corto");
+  }
+  state.greetedAt = new Date().toISOString();
+  return reply(state, `Hola! Soy *${botName()}* 🤖, la bot de *Megaprinter* y tu agente para lo que necesites. Aquí estoy para ayudarte siempre!\n\n${ASK_PRODUCT}`, "R9:saludo");
+}
+
+/** Respuesta y, si hay un pedido a medias, la pregunta del paso pendiente. */
+function withPending(state: BotState, deps: BotDeps, text: string, decision: string): TurnResult {
+  const pending = state.cart.length && state.stage !== "choosing" && !isTicketStage(state.stage) ? missingStage(state, deps) : "";
+  if (!pending || pending === "idle") return reply(state, text, decision);
+  state.stage = pending;
+  return reply(state, `${text}\n\n${pending === "confirm" ? "Seguimos con tu pedido? 🛍️ Respóndeme *sí* para confirmarlo 💙" : questionFor(pending, deps)}`, decision);
+}
+
+const FOLLOW_UP_REPLY =
+  "Te paso con una persona del equipo para que revise tu caso 🙌 Yo no tengo el estado de los equipos en el taller, pero en breve te escriben por aquí 💙";
+
+/** Precio de la revision: el diagnostico es sin costo y se da el rango referencial. */
+function servicePriceText(message: string, catalog: BotProduct[]) {
+  const device = detectDevice(message);
+  if (device) {
+    const estimate = estimateService(device, message, catalog);
+    return `El diagnóstico es *sin costo* 🙌 Para tu ${deviceLabel(device).toLowerCase()} el precio referencial es ${priceText(estimate)} (${estimate.label.toLowerCase()}); el técnico te confirma el precio final.`;
+  }
+  return "El diagnóstico es *sin costo* 🙌 Como referencia, la revisión de una impresora va de $15 a $35 y la de una laptop de $20 a $60; el técnico te confirma el precio final.";
 }
 
 /** Pregunta por lo que falta (o muestra el resumen), con un prefijo opcional. */
@@ -455,6 +530,9 @@ const FILLER = new Set(
   "hola buenas buenos dias tardes noches necesito quiero busco servicio soporte tecnico tecnica suministro suministros ayuda ayudar ayudan por favor porfa para mi mis el la los las de del con un una que me se y o tengo hay esta es un su sus al".split(" "),
 );
 const DEVICE_WORDS = new Set(DEVICES.flatMap((device) => device.words as readonly string[]));
+
+const ISSUE_WORDS = /\b(imprime|rayas?|atasca|enciende|prende|lenta|lento|calienta|pantalla|error|ruido|mancha|manchas|colores?|virus|bisagra|disco|bateria|ram|teclado|wifi|carga|apaga|reinicia|traba|cuelga|luces|parpadea|rodillo|cabezal|imagen|graba)\b/;
+const describesIssue = (text: string) => wantsService(text) || ISSUE_WORDS.test(normalize(text));
 
 /** Quedan al menos 2 palabras que no son saludo, relleno ni el nombre del equipo. */
 function describesProblem(message: string) {
@@ -534,6 +612,23 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
     state.ticket = createInitialState().ticket;
     return reply(state, "Listo, cancelé la solicitud 👍 Si necesitas algo más, aquí estoy 😊", "R10:ticket_cancelado");
   }
+  const leaveTicket = () => {
+    state.stage = state.ticket.stageBefore === "ordered" ? "idle" : state.ticket.stageBefore || "idle";
+    state.ticket = createInitialState().ticket;
+  };
+  if (isShortNo(text) || /\b(cambio de tema|solo (es )?una consulta|ya no|eso no|de eso no|no gracias|no por ahora)\b/.test(normalize(text))) {
+    leaveTicket();
+    return reply(state, "Listo, no la registro 👍 Si después necesitas el servicio, aquí estoy. Te ayudo con algo más? 😊", "R10:ticket_cancelado");
+  }
+  // "que precio tiene la revision?" en medio del ticket: se responde y se sigue.
+  if (asksServicePrice(text) || (state.ticket.type === "servicio_tecnico" && /^(que |cual es el |y el )?(precio|costo|cuanto)( tiene| es| cuesta| cobran)?\??$/.test(normalize(text)))) {
+    return askTicketNext(state, deps, "R10:ticket_precio", servicePriceText(`${state.ticket.device} ${text}`, await deps.loadCatalog()));
+  }
+  // Precio de un producto ("precio de la impresora L3350"): se deja el ticket y se atiende normal.
+  if (/\b(precio|cuanto cuesta|cuanto vale)\b/.test(normalize(text))) {
+    leaveTicket();
+    return null;
+  }
   if (state.stage === "ticket_name") {
     if (!looksLikeName(text)) return reply(state, "Me pasas tu nombre y apellido? 😊", "R10:ticket_nombre_invalido");
     state.customerName = text.replace(/\s+/g, " ");
@@ -564,21 +659,17 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
       const kind = state.ticket.type === "suministros" ? "solicitud de suministros" : "ticket de servicio técnico";
       state.stage = "idle";
       state.ticket = createInitialState().ticket;
-      return reply(
-        state,
-        `Listo! ✅ Tu ${kind} *${ticketNumber}* quedó registrado 🙌\n\nEn breve un asesor tomará el chat para ayudarte 💙`,
-        "R10:ticket_creado",
-        { intent: "dudas", route: "human" },
-      );
+      return toHuman(state, `Listo! ✅ Tu ${kind} *${ticketNumber}* quedó registrado 🙌\n\nEn breve un asesor tomará el chat para ayudarte 💙`, "R10:ticket_creado");
     }
-    // "no" / "no, está mal" corrige; "no imprime, sale con rayas" es mas detalle del problema.
-    if (isNo(text) && normalize(text).split(" ").length <= 3 && !describesProblem(text.replace(/^no\b/i, ""))) {
-      state.ticket.issue = "";
-      return askTicketNext(state, deps, "R10:ticket_corregir", "Claro! ✏️ Volvamos a contarlo");
+    // Solo se agrega al ticket lo que cuenta del problema ("tambien se calienta").
+    // Otra cosa ("voy a su local", "precio de la L3350") deja el ticket y se atiende normal:
+    // en produccion todo se pegaba al problema y el cliente no podia salir del resumen.
+    if (describesIssue(text)) {
+      state.ticket.issue = `${state.ticket.issue}. ${text}`.slice(0, 500);
+      return askTicketNext(state, deps, "R10:ticket_mas_detalle", "Anotado 📝");
     }
-    // Agrega detalle y vuelve a mostrar el resumen.
-    state.ticket.issue = `${state.ticket.issue}. ${text}`.slice(0, 500);
-    return askTicketNext(state, deps, "R10:ticket_mas_detalle", "Anotado 📝");
+    leaveTicket();
+    return null;
   }
   return null;
 }
@@ -623,13 +714,17 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
         "R1:foto_producto_sin_stock",
       );
     }
+    // Orden de ingreso del taller, pantalla con error, equipo en reparacion: lo ve una persona.
+    if (outcome.status === "image" && /orden|ingreso|servicio|taller|reparaci|error|bootable|factura|garant/i.test(outcome.description)) {
+      return toHuman(state, `Recibí tu imagen (${outcome.description}) 📎 ${FOLLOW_UP_REPLY}`, "R1:imagen_caso");
+    }
     if (outcome.status === "image") {
       const pending = outcome.pendingOrderNumber
         ? `\n\nSi querías enviar el comprobante del pedido *${outcome.pendingOrderNumber}*, mándame la foto del comprobante de la transferencia.`
         : "";
       return reply(
         state,
-        `Recibí tu imagen (${outcome.description}) 📎 Si buscas un producto, mándame una foto o captura de él (puede ser de nuestro Instagram) y te digo si lo tenemos.${pending}`,
+        `Recibí tu imagen (${outcome.description}) 📎 Cuéntame qué necesitas con ella: si buscas ese producto, te digo si lo tenemos; si es sobre un equipo en servicio técnico o un pago, escribe *asesor* y te atiende una persona 🙌${pending}`,
         "R1:imagen",
       );
     }
@@ -643,9 +738,10 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
       // Captura del pago con tarjeta: se verifica con Payphone como un "pagado".
       const check = await deps.checkCardPayment(state.orderId);
       if (check) return cardCheckReply(state, check);
-      return reply(
+      // Suele ser el pago de una reparacion o de algo que cerro un asesor: lo revisa una persona.
+      return toHuman(
         state,
-        "Recibí tu archivo 📎 pero no encuentro un pedido pendiente de transferencia con este número. Si hiciste el pedido por la web, escríbeme tu número de pedido (empieza con *MP-*).",
+        "Recibí tu comprobante 📎 No lo veo ligado a un pedido de este chat, así que se lo paso a una persona del equipo para que lo valide 🙌 Si es de un pedido de la web, escríbeme también el número (empieza con *MP-*).",
         "R1:comprobante_sin_pedido",
       );
     }
@@ -679,13 +775,73 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     );
   }
 
-  // R2: pedir una persona.
-  if (wantsHuman(message)) {
+  const offeredHuman = state.offeredHuman;
+  state.offeredHuman = false;
+  const menuShown = state.menuShown;
+  state.menuShown = false;
+
+  // Menu principal: "1"…"8" con el menu a la vista, o "menú" para verlo.
+  const menuChoice = menuShown && !state.options.length ? extractChoice(message, MENU.length) : null;
+  if (menuChoice) {
+    const item = MENU[menuChoice - 1];
+    if (item.key === "asesor") {
+      return toHuman(state, "De una! Te paso con una persona del equipo de Megaprinter 🙌 En breve te escribe por aquí 💙", "R2:menu_asesor");
+    }
+    if (item.key === "servicio" || item.key === "suministros") {
+      startTicket(state, item.key === "servicio" ? "servicio_tecnico" : "suministros", "");
+      return askTicketNext(state, deps, item.key === "servicio" ? "R10:menu_servicio" : "R10:menu_suministros", item.key === "servicio" ? "Claro! Te ayudo con el servicio técnico 🛠️" : "Claro! Te ayudo con los suministros 🧴");
+    }
+    const catalog = await deps.loadCatalog();
+    if (item.key === "catalogo") return reply(state, catalogOverview(catalog, deps.storeUrl), "R5:menu_catalogo", { intent: "menu", route: "catalog" });
+    const pattern = "categories" in item ? item.categories : /$^/;
+    const products = catalog.filter((product) => product.kind !== "service" && pattern.test(normalize(product.category))).sort((a, b) => a.price - b.price);
+    if (products.length) return showOptions(state, products.slice(0, 8), `R5:menu_${item.key}`, `Estas son nuestras ${item.label.replace(/^\S+\s/, "").toLowerCase()} 👇 (de menor a mayor precio)`);
+    return reply(state, `Ahora mismo no tengo ${item.label.replace(/^\S+\s/, "").toLowerCase()} en el catálogo 🙈 Escribe *asesor* y una persona te ayuda.`, "R5:menu_vacio");
+  }
+  if (/^(menu|menú|opciones|inicio|volver)$/i.test(message.replace(/[.!?]/g, "").trim())) {
+    return reply(state, ASK_PRODUCT, "R9:menu");
+  }
+  const inHandoff = within(state.handoffAt, HANDOFF_MS);
+  const midCheckout = state.cart.length > 0 && ["name", "email", "address", "payment", "bank", "confirm"].includes(state.stage);
+
+  // R2: pedir una persona, o "sí" cuando el bot ofrecio un asesor.
+  if (wantsHuman(message) || (offeredHuman && isYes(message))) {
     const contact = deps.supportPhone ? ` También puedes escribir directo al ${deps.supportPhone}.` : "";
-    return reply(state, `Claro! Te paso con una persona real del equipo de Megaprinter 🙌💙 En un ratito te escribe por aquí.${contact}`, "R2:humano", {
-      intent: "dudas",
-      route: "human",
-    });
+    return toHuman(state, `Claro! Te paso con una persona real del equipo de Megaprinter 🙌💙 En un ratito te escribe por aquí.${contact}`, offeredHuman && !wantsHuman(message) ? "R2:acepta_asesor" : "R2:humano");
+  }
+
+  // R2: sigue un caso que lleva una persona (equipo en el taller, "me confirma", "alguna novedad").
+  if (!midCheckout && followsUpCase(message)) {
+    return toHuman(state, FOLLOW_UP_REPLY, "R2:seguimiento_caso");
+  }
+  // "me quedo con la opcion 1" sin opciones en este chat: se las dio un asesor.
+  if (refersToOption(message) && !state.options.length) {
+    return toHuman(state, "Te paso con la persona del equipo que te mostró esas opciones para cerrar tu compra 🙌 En breve te escribe por aquí 💙", "R2:opcion_de_asesor");
+  }
+  // Ya se paso a un asesor hace poco: "ok", "sí", "gracias" no reinician la charla.
+  if (inHandoff && (isAck(message) || isGreeting(message))) {
+    return reply(state, "Ya le avisé al equipo 🙌 En breve una persona te escribe por aquí 💙", "R2:esperando_asesor");
+  }
+
+  // Saludo con la lista a la vista ("Buen día") y relleno ("ok", "bueno", "Mmm, entiendo"):
+  // respuesta corta, sin repetir el menu completo cada vez.
+  if (state.stage === "choosing" && isGreeting(message) && normalize(message).split(" ").length <= 3) return greet(state);
+  // En "choosing" un "sí" elige la unica opcion (R5), no es relleno.
+  if ((state.stage === "idle" || (state.stage === "choosing" && !isYes(message))) && !state.cart.length && isAck(message)) {
+    return reply(state, "De una 😊 Aquí estoy para lo que necesites. Si quieres ver las opciones, escríbeme *menú* 💙", "R9:ok");
+  }
+
+  // Donde queda la tienda y horarios (datos fijos, la IA no los inventa).
+  if (asksStoreInfo(message) && state.stage !== "address") {
+    const text = asksOnlyHours(message) ? `🕒 Nuestros horarios:\n${STORE.hours.map((line) => `• ${line}`).join("\n")}` : storeInfoText();
+    return withPending(state, deps, text, "R8:tienda");
+  }
+
+  // Precio de la revision: se responde y se ofrece registrar la solicitud.
+  if (asksServicePrice(message) && !isTicketStage(state.stage)) {
+    startTicket(state, "servicio_tecnico", message);
+    state.ticket.issue = "";
+    return askTicketNext(state, deps, "R10:precio_revision", servicePriceText(message, await deps.loadCatalog()));
   }
 
   // R10: servicio tecnico y suministros (los atiende un asesor).
@@ -698,7 +854,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   const aboutPayment = /\b(link|pago|pagar|tarjeta|transferencia|comprobante|pedido|payphone)\b/.test(normalized);
   const serviceAsked = wantsService(message) && !claimsPaid(message) && !aboutPayment;
   // "impresora de tinta continua" es un producto; "tinta para mi Epson" o "toner" son suministros.
-  const explicitSupplies = /\b(suministros?|toner|cartuchos?|botellas?|repuestos?|consumibles?)\b/.test(normalized);
+  const explicitSupplies = /\b(suministros?|toner|cartuchos?|botellas?|repuestos?|consumibles?)\b/.test(normalized) || PARTS.test(normalized);
   const suppliesAsked = !serviceAsked && wantsSupplies(message) && state.stage !== "choosing" && (explicitSupplies || !/\b(impresoras?|multifuncion|laptop|monitor|camara)\b/.test(normalized));
   if (serviceAsked || suppliesAsked) {
     startTicket(state, serviceAsked ? "servicio_tecnico" : "suministros", message);
@@ -768,7 +924,12 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
       state.stage = state.cart.length ? missingStage(state, deps) : "idle";
       return reply(state, catalogOverview(catalogItems, deps.storeUrl), "R5:catalogo_completo", { intent: "menu", route: "catalog" });
     }
-    const choice = extractChoice(message, state.options.length) || (state.options.length === 1 && isYes(message) ? 1 : null);
+    // "Epson" con la lista a la vista: se elige entre LAS OPCIONES mostradas, no del catalogo entero
+    // (en produccion "Epson" con la L4360 en pantalla agrego una L3250).
+    const shown = state.options.map((option) => byId.get(option.productId)).filter((product): product is BotProduct => Boolean(product));
+    const named = message.split(/\s+/).length <= 4 && !/\?/.test(message) ? searchProducts(shown, message) : [];
+    const byName = named.length === 1 ? state.options.findIndex((option) => option.productId === named[0].id) + 1 : 0;
+    const choice = extractChoice(message, state.options.length) || (state.options.length === 1 && isYes(message) ? 1 : null) || byName || null;
     if (choice) {
       const option = state.options[choice - 1];
       const current = byId.get(option.productId);
@@ -805,7 +966,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     // pagarse hace dias): no se repite la instruccion de pago.
     if (isGreeting(message)) {
       Object.assign(state, { cart: [], options: [], paymentMethod: null, bankId: "", orderId: "", orderNumber: "", stage: "idle" });
-      return reply(state, `¡Hola de nuevo! 👋 ${ASK_PRODUCT}
+      return reply(state, `Hola de nuevo! 👋 ${ASK_PRODUCT}
 
 Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     }
@@ -882,9 +1043,18 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
         total: order.total,
       });
     }
-    if (isNo(message)) {
+    if (isShortNo(message)) {
       return reply(state, "Claro! ✏️ Qué cambiamos? Escríbeme el dato nuevo (nombre, correo, dirección o forma de pago) o el producto que quieres agregar o quitar 😊", "R7:pedir_cambio");
     }
+  }
+
+  // Efectivo: por aqui solo hay tarjeta o transferencia; una persona coordina el pago en tienda.
+  if (wantsCash(message) && state.cart.length && ["payment", "bank", "confirm", "address"].includes(state.stage)) {
+    return toHuman(state, "Por aquí puedo cobrar con *tarjeta* o *transferencia* 💳🏦 Si prefieres pagar en efectivo en la tienda, te paso con una persona del equipo para que te separe el equipo 🙌", "R6:efectivo");
+  }
+  // "primero voy a averiguar", "deme un momento": no es un dato del pedido.
+  if (["name", "email", "address"].includes(state.stage) && isHesitation(message) && !extractEmail(message)) {
+    return reply(state, `Dale, sin apuro 😊 Tu carrito queda guardado. Cuando quieras seguimos: ${questionFor(state.stage, deps).charAt(0).toLowerCase()}${questionFor(state.stage, deps).slice(1)}`, "R6:sin_apuro");
   }
 
   // "también una impresora" cuando se pide el nombre es un producto, no un nombre.
@@ -945,11 +1115,13 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   }
 
   // R9: saludo o algo que no se entendio: se retoma el paso pendiente.
-  if (isGreeting(message) && !state.cart.length) {
-    return reply(state, `Hola! Soy *${botName()}* 🤖, la bot de *Megaprinter* y tu agente para lo que necesites. Aquí estoy para ayudarte siempre!\n\n${ASK_PRODUCT}`, "R9:saludo");
-  }
+  if (isGreeting(message) && !state.cart.length) return greet(state);
   if (state.stage === "choosing") {
     return reply(state, "No te entendí 🙏 Responde con el número de la opción que quieres, o dime qué otra cosa buscas.", "R9:eleccion_no_entendida");
+  }
+  // Algo que no se entendio sin pedido a medias: se ofrece una persona en vez de repetir el menu.
+  if (!state.cart.length) {
+    return reply(state, `Uy, no te entendí bien 🙈 ${ASK_PRODUCT}`, "R9:no_entendido");
   }
   return askNext(state, deps, "R9:siguiente_paso");
 }
@@ -986,11 +1158,24 @@ export function decideRoute(
   // "hablo con una persona?" es una pregunta (se responde que es un bot), no un pedido de asesor.
   if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
+  // Menu principal: 8 = asesor, 7 = catalogo.
+  const menuChoice = state.menuShown && !state.options.length ? extractChoice(message, MENU.length) : null;
+  if (menuChoice && MENU[menuChoice - 1].key === "asesor") return { route: "human", reason: "menu: asesor" };
+  if (menuChoice && MENU[menuChoice - 1].key === "catalogo") return { route: "catalog", reason: "menu: catalogo" };
+  if (menuChoice) return { route: "conversation", reason: `menu: ${MENU[menuChoice - 1].key}` };
+  if (state.offeredHuman && isYes(message)) return { route: "human", reason: "acepta el asesor que ofrecio el bot" };
+  const midCheckout = state.cart.length > 0 && ["name", "email", "address", "payment", "bank", "confirm"].includes(state.stage);
+  if (!midCheckout && followsUpCase(message)) return { route: "human", reason: "sigue un caso con el equipo" };
+  if (refersToOption(message) && !state.options.length) return { route: "human", reason: "opcion que dio un asesor" };
+  if (wantsCash(message) && state.cart.length && ["payment", "bank", "confirm", "address"].includes(state.stage)) return { route: "human", reason: "quiere pagar en efectivo" };
   if (wantsTracking(message) || orderNumberIn(message)) return { route: "conversation", reason: "consulta de pedido" };
   // "sí" al resumen del ticket: se registra y el chat pasa a un asesor (el flujo silencia el bot).
   if (state.stage === "ticket_confirm" && isYes(message)) return { route: "human", reason: "confirma ticket de servicio" };
   if (state.stage === "confirm" && isYes(message)) {
-    if (state.paymentMethod === "transfer" && options.bank) return { route: "checkoutTransfer", reason: "confirma pedido por transferencia" };
+    // Al flujo de tarjeta TAMBIEN con transferencia: los dos llaman a /checkout, pero el flujo
+    // "Checkout transferencia" tiene el evento IMAGEN O VIDEO y la Rule de texto nunca llegaba
+    // (oct-2026: 4 "sí" por transferencia sin respuesta y sin pedido creado).
+    if (state.paymentMethod === "transfer" && options.bank) return { route: "checkoutCard", reason: "confirma pedido por transferencia" };
     if (state.paymentMethod === "card" && options.cardEnabled) return { route: "checkoutCard", reason: "confirma pedido con tarjeta" };
     return { route: "conversation", reason: "confirma pedido sin metodo de pago" };
   }

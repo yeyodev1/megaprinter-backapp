@@ -12,6 +12,9 @@ export const isYes = (text: string) =>
 
 export const isNo = (text: string) => has(text, /^(no+|nop|nel|todavia no|aun no|espera|cambiar|corregir)\b/);
 
+/** "no me ha llegado la informacion" empieza con "no" pero no es un "no" al resumen. */
+export const isShortNo = (text: string) => isNo(text) && normalize(text).split(" ").length <= 3;
+
 export const wantsHuman = (text: string) =>
   has(text, /\b(asesor|humano|persona|agente|alguien real|hablar con alguien|vendedor|reclamo|queja|estafa|devolucion|garantia)\b/);
 
@@ -25,7 +28,7 @@ export const wantsCancel = (text: string) =>
   has(text, /\b(cancela(r)?|ya no (lo )?quiero|olvidalo|vaciar( el)? carrito|borra(r)? (todo|el carrito))\b/);
 
 export const isGreeting = (text: string) =>
-  has(text, /^(hola+|buen(os|as)? (dias|tardes|noches)|buenas|saludos|hey|que tal)\b/) && normalize(text).split(" ").length <= 5;
+  has(text, /^(hola+|buen(os|as)? (dias?|tardes?|noches?)|buenas|saludos|hey|que tal)\b/) && normalize(text).split(" ").length <= 5;
 
 export function detectPaymentMethod(text: string): "card" | "transfer" | null {
   const value = normalize(text);
@@ -70,12 +73,58 @@ export const asksIfBot = (text: string) =>
 
 /** "pagado", "ya pagué", "listo, pagué", "ya hice el pago": dice que ya pagó. */
 export const claimsPaid = (text: string) =>
-  has(text, /\b(pagado|ya pague|ya pagamos|listo pague|ya hice el pago|ya realice el pago|ya cancele|pago hecho|ya esta pagado|acabo de pagar)\b/);
+  has(text, /\b(pagado|ya pague+|ya pagamos|listo pague+|ya hice el pago|ya realice el pago|ya cancele|pago hecho|ya esta pagado|acabo de pagar)\b/);
 
 /** Quiere servicio tecnico: reparar, mantenimiento, formateo, algo que falla. */
 export const wantsService = (text: string) =>
-  has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico)\b/);
+  has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico|tiene problemas?|no detecta|no sale(n)? (todos )?(los )?colores)\b/);
 
 /** Quiere suministros: tinta, toner, cartuchos, papel, repuestos. */
 export const wantsSupplies = (text: string) =>
-  has(text, /\b(suministro|suministros|tinta|tintas|toner|cartucho|cartuchos|botella de tinta|cinta|papel|repuesto|repuestos|consumible|consumibles)\b/);
+  has(text, /\b(suministro|suministros|tinta|tintas|toner|cartucho|cartuchos|botella de tinta|cinta|papel|repuesto|repuestos|consumible|consumibles|cargador|adaptador|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/);
+
+/** Repuestos y accesorios que no estan en el catalogo: se cotizan como suministros. */
+export const PARTS = /\b(repuestos?|cargador(es)?|adaptador(es)?|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/;
+
+/** Donde queda la tienda / horarios. "direccion" sola tambien (fuera del paso de direccion). */
+export const asksStoreInfo = (text: string) =>
+  has(text, /\b(ubicacion|ubicaciones|ubican|ubicados|donde (estan|quedan|queda|se encuentran|los encuentro)|direccion (de la tienda|del local|de su local|de sus locales|de ustedes)|su local|sus locales|sucursal(es)?|horarios?|a que hora (abren|cierran|atienden)|abren|cierran|atienden (los )?(sabados|domingos|hoy))\b/) ||
+  has(text, /^(la )?direccion\??$/);
+
+/** Horario sin mas (para responder solo eso). */
+export const asksOnlyHours = (text: string) => has(text, /\b(horarios?|a que hora|abren|cierran)\b/) && !has(text, /\b(ubica|donde|direccion|local|sucursal)/);
+
+/**
+ * Sigue un caso que ya lleva una persona: equipo en el taller, "me confirma",
+ * "alguna novedad", codigo de orden. El bot no tiene esa informacion: pasa a un asesor.
+ */
+export const followsUpCase = (text: string) =>
+  has(
+    text,
+    /\b(deje (mi|el|la|una|un)|que deje|dejo mi|el tecnico dejo|retirar (el|la|mi) (equipo|maquina|laptop|impresora|computadora)|retiro de mi|alguna novedad|hay novedad(es)?|no me (han|ha) (dicho|respondido|contestado|escrito)|me dej(o|e) en visto|nome deje en visto|ya esta (lista|listo|reparad[ao])|cuanto(s)? dias (tarda|demora)|cuanto (tiempo )?(tarda|demora) la reparacion|codigo \d+|orden de (ingreso|servicio|trabajo)|quedara bien|esa contrasena|cancelar la diferencia)\b/,
+  ) ||
+  // "me confirma amiga", "me avisa", "me indica porfavor": solos, sin pedir un producto.
+  (has(text, /^(me (confirma|avisa|indica)n?|confirmeme|me avisa para ir)\b/) && normalize(text).split(" ").length <= 5 && !has(text, /\b(precio|cuanto|tienen|hay)\b/));
+
+/** Mensajes de relleno: "ok", "bueno", "gracias", "deme un momento", "Mmm, entiendo. Continúa." (solo esas palabras). */
+const ACK_WORDS = new Set(
+  "si sii ok okey okay bueno listo dale gracias muchas mil vale perfecto entiendo entendido ya ah mmm mm continua continue deme un momento espere espera vuelvo estamos a la orden por favor porfa amiga amigo genial chevere excelente de nada".split(" "),
+);
+export const isAck = (text: string) => {
+  const words = normalize(text).replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 6 && words.every((word) => ACK_WORDS.has(word) || /^m+$/.test(word) || /^o+k+$/.test(word));
+};
+
+/** Duda o "lo pienso": no es un dato para el pedido. */
+export const isHesitation = (text: string) =>
+  has(text, /\b(averiguar|averiguando|lo pienso|pensarlo|pensar|mas tarde|luego te|despues te|primero voy|todavia no|aun no se|deme un momento|un momento|en una hora)\b/);
+
+/** Pago en efectivo (por aqui solo hay tarjeta o transferencia). */
+export const wantsCash = (text: string) => has(text, /\b(efectivo|cash|pago en (el )?local|pagar en (el )?local|pago al retirar|contra ?entrega)\b/);
+
+/** Pregunta el precio de la revision / reparacion (el diagnostico es sin costo). */
+export const asksServicePrice = (text: string) =>
+  has(text, /\b(precio|costo|cuanto|vale|cobran)\b.*\b(revision|diagnostico|reparacion|mantenimiento|arreglo|limpieza)\b|\b(revision|diagnostico|reparacion|mantenimiento)\b.*\b(precio|costo|cuanto|vale|cobran)\b/);
+
+/** "me quedo con la opcion 1" cuando el bot no mostro opciones: se las dio un asesor. */
+export const refersToOption = (text: string) => has(text, /\b(opcion|la numero|el numero)\s*\d\b/);

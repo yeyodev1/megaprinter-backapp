@@ -626,7 +626,10 @@ export async function whatsappBotDecide(req: Request, res: Response) {
  */
 async function notifyHandoff(phone: string, result: TurnResult, message: string) {
   try {
-    const to = (process.env.HANDOFF_EMAIL || "").split(",").map((value) => value.trim()).filter(Boolean);
+    const list = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
+    // Marilexi atiende los chats; Selena y Johnny van en copia (pedido del cliente, oct-2026).
+    const to = list(process.env.HANDOFF_EMAIL || "marilexich23@gmail.com");
+    const cc = list(process.env.HANDOFF_CC || "selenamendoza100@gmail.com,jhnnmurillo@gmail.com").filter((email) => !to.includes(email));
     const session: any = await WhatsAppSessionModel.findOne({ phone }, { history: 1 }).lean();
     const lines = (session?.history || [])
       .slice(-10)
@@ -641,7 +644,7 @@ async function notifyHandoff(phone: string, result: TurnResult, message: string)
 <p>Mila ya le dijo que en breve le escriben por aquí. Respóndele desde BuilderBot (el bot queda en silencio en ese chat).</p>
 <h3>Conversación reciente</h3>${lines}
 <p><a href="https://megaprinter.ec/admin/bot?phone=${encodeURIComponent(phone)}">Ver en el panel</a></p>`;
-    const sent = await sendEmail(to.length ? to : storeRecipients(), `🙋 ${name} quiere hablar con un asesor (${phone})`, html);
+    const sent = await sendEmail(to.length ? to : storeRecipients(), `🙋 ${name} quiere hablar con un asesor (${phone})`, html, undefined, cc);
     if (!sent.ok) createAlert("email_failed", "No se pudo avisar por correo de un cliente que pidió asesor", `${phone}: ${sent.error || ""}`, `/admin/bot?phone=${encodeURIComponent(phone)}`);
   } catch (error) {
     console.error("[bot] no se pudo avisar del asesor:", error);

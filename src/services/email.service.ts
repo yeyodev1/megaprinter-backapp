@@ -21,6 +21,7 @@ export async function sendEmail(
   subject: string,
   html: string,
   replyTo?: string,
+  cc: string[] = [],
 ): Promise<{ ok: boolean; error?: string }> {
   const resendApiKey = process.env.RESEND_API_KEY;
   const recipients = (Array.isArray(to) ? to : [to]).filter(Boolean);
@@ -29,7 +30,7 @@ export async function sendEmail(
   try {
     await axios.post(
       "https://api.resend.com/emails",
-      { from: emailFrom(), to: recipients, ...(replyTo ? { reply_to: replyTo } : {}), subject, html },
+      { from: emailFrom(), to: recipients, ...(cc.length ? { cc } : {}), ...(replyTo ? { reply_to: replyTo } : {}), subject, html },
       { headers: { Authorization: `Bearer ${resendApiKey}`, "Content-Type": "application/json" }, timeout: 10000 },
     );
     return { ok: true };

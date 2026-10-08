@@ -22,6 +22,9 @@ export type ExtractedIntent =
   | "dato"
   | "saludo"
   | "fuera_de_tema"
+  | "servicio_tecnico"
+  | "suministros"
+  | "cuenta_bancaria"
   | "otro";
 
 export interface Extraction {
@@ -88,8 +91,12 @@ intent (uno):
 - "humano": pide un asesor, reclama, garantía o algo que el bot no puede resolver.
 - "dato": solo responde un dato que el bot pidió (nombre, correo, dirección, forma de pago, sí/no).
 - "saludo": solo saluda.
-- "fuera_de_tema": pide algo que NO es de Megaprinter (tareas, recetas, chistes, política, programación, traducciones, consejos generales, escribir textos, otras tiendas). Política de Meta: este bot SOLO atiende ventas y soporte de Megaprinter; nunca respondas eso. Repuestos, accesorios, drivers, instalación de un equipo, números sueltos o códigos NO son fuera_de_tema (usa "pregunta" o "humano").
+- "fuera_de_tema": pide algo que NO es de Megaprinter (tareas, recetas, chistes, política, programación, traducciones, consejos generales, escribir textos, otras tiendas). Política de Meta: este bot SOLO atiende ventas y soporte de Megaprinter; nunca respondas eso. Repuestos, accesorios, papel, resmas, tintas, drivers, instalación de un equipo, números sueltos o códigos NO son fuera_de_tema.
+- "servicio_tecnico": un equipo suyo falla o necesita reparación, mantenimiento, revisión, instalación o drivers.
+- "suministros": pide tintas, tóner, cartuchos, papel (resmas, A4, fotográfico, de sublimación), repuestos o accesorios que no son un equipo del catálogo. USA EL HISTORIAL: si antes pidió una resma y ahora escribe "A4" o "de sublimación", sigue siendo suministros. En searchQuery pon TODO lo que pide junto, con lo del historial ("resma de papel de sublimación A4").
+- "cuenta_bancaria": quiere los datos de una cuenta para transferir o depositar ("Cuenta Pichincha", "a qué cuenta deposito").
 - "otro": nada de lo anterior.
+Lee siempre el historial reciente: un mensaje corto ("A4", "esa misma", "la negra", "8") casi siempre completa lo que se venía hablando.
 
 Campos:
 - items: SOLO si el cliente identifica un producto concreto (por nombre, modelo o porque responde a opciones que el bot mostró) Y dice que lo quiere comprar ("dame esa", "quiero la L3250", "la segunda"). Preguntar precio o disponibilidad ("tiene la brother sp-1?", "precio de la L4360", "deseo información de…") NO es comprar: intent "pregunta" con ese producto en suggestions. ref = número del catálogo. Si hay varios que encajan, NO elijas: deja items vacío y usa suggestions.
@@ -161,7 +168,7 @@ export const aiExtract: Extractor = async (message, context) => {
     return Number.isInteger(index) && index >= 0 && index < context.catalog.length ? context.catalog[index] : null;
   };
   const str = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
-  const intents: ExtractedIntent[] = ["comprar", "pregunta", "catalogo", "consultar_pedido", "humano", "dato", "saludo", "fuera_de_tema", "otro"];
+  const intents: ExtractedIntent[] = ["comprar", "pregunta", "catalogo", "consultar_pedido", "humano", "dato", "saludo", "fuera_de_tema", "servicio_tecnico", "suministros", "cuenta_bancaria", "otro"];
   const intent = intents.includes(parsed.intent) ? (parsed.intent as ExtractedIntent) : fallback.intent;
   const answer = str(parsed.answer);
 

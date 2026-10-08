@@ -120,6 +120,8 @@ const ACK_WORDS = new Set(
   "si sii ok okey okay bueno listo dale gracias muchas mil vale perfecto entiendo entendido ya ah mmm mm continua continue deme un momento espere espera vuelvo estamos a la orden por favor porfa amiga amigo genial chevere excelente de nada".split(" "),
 );
 export const isAck = (text: string) => {
+  // "A4", "L3250": con numeros es un dato, no relleno (chat real: "A4" respondia "De una 😊").
+  if (/\d/.test(text)) return false;
   const words = normalize(text).replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
   return words.length > 0 && words.length <= 6 && words.every((word) => ACK_WORDS.has(word) || /^m+$/.test(word) || /^o+k+$/.test(word));
 };

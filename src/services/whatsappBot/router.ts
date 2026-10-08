@@ -344,9 +344,15 @@ function missingStage(state: BotState, deps: BotDeps): Stage {
   return "confirm";
 }
 
+const NOT_NAME_WORDS = new Set(
+  "esta este esa ese estos estas misma mismo mismas igual eso esto aqui ahi otra otro cual cuanto precio quiero necesito tengo tiene tienen busco para por favor gracias ok listo bueno dale resma papel tinta laptop impresora monitor camara asesor persona hola buenas".split(" "),
+);
+
 const looksLikeName = (text: string) => {
   const value = text.trim();
-  return /^[\p{L}][\p{L}' .-]{1,60}$/u.test(value) && value.split(/\s+/).length <= 5 && !isYes(value) && !isNo(value) && !isGreeting(value);
+  // "Está misma", "la de antes": respuestas que no son un nombre (chat real oct-2026).
+  const notName = normalize(value).split(" ").some((word) => NOT_NAME_WORDS.has(word));
+  return /^[\p{L}][\p{L}' .-]{1,60}$/u.test(value) && value.split(/\s+/).length <= 5 && !isYes(value) && !isNo(value) && !isGreeting(value) && !notName;
 };
 
 /** Aplica los datos que el cliente haya dado en cualquier momento (suelen mandar todo junto). */
@@ -481,6 +487,18 @@ function showOptions(state: BotState, products: BotProduct[], decision: string, 
   const list = [...products.map((product, index) => productLine(product, index + 1)), `*${products.length + 1}.* 📚 Ver el catálogo completo`].join("\n");
   const ask = `${products.length === 1 ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*" : "Cuál te agrego? 🛒 Respóndeme con el número"}\nSi prefieres hablar con una persona, escribe *asesor* 🙋`;
   return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}${outro ? `\n\n${outro}` : ""}`, decision);
+}
+
+/** Datos para transferir: la cuenta del banco que nombro o todas las activas. */
+function bankAccountsReply(state: BotState, deps: BotDeps, message: string): TurnResult {
+  const askedBank = detectBank(message, deps.banks);
+  const accounts = askedBank ? [askedBank] : deps.banks;
+  const order = state.orderNumber ? ` del pedido *${state.orderNumber}*` : "";
+  return reply(
+    state,
+    `Claro! ${askedBank ? "Estos son los datos" : "Estas son nuestras cuentas"} para transferir 🏦\n\n${accounts.map(bankText).join("\n\n")}\n\nCuando transfieras, mándame por aquí la *foto del comprobante*${order} 📸 y el equipo valida tu pago 💙`,
+    "R3:datos_cuenta",
+  );
 }
 
 // ─── Tintas del catalogo ────────────────────────────────────────────────────
@@ -882,15 +900,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   if (!state.cart.length && ["idle", "choosing", "ordered"].includes(state.stage) && deps.banks.length) {
     const askedBank = /\b(cuentas?|transfer\w*|deposit\w*|banco)\b/.test(normalize(message)) ? detectBank(message, deps.banks) : null;
     const asksAccounts = /\b(numero de cuenta|numeros de cuenta|datos (bancarios|para (transferir|depositar))|cuentas? (bancarias?|para (transferir|depositar))|a (que|cual) cuenta|donde (transfiero|deposito))\b/.test(normalize(message));
-    if (askedBank || asksAccounts) {
-      const accounts = askedBank ? [askedBank] : deps.banks;
-      const order = state.orderNumber ? ` del pedido *${state.orderNumber}*` : "";
-      return reply(
-        state,
-        `Claro! ${askedBank ? "Estos son los datos" : "Estas son nuestras cuentas"} para transferir 🏦\n\n${accounts.map(bankText).join("\n\n")}\n\nCuando transfieras, mándame por aquí la *foto del comprobante*${order} 📸 y el equipo valida tu pago 💙`,
-        "R3:datos_cuenta",
-      );
-    }
+    if (askedBank || asksAccounts) return bankAccountsReply(state, deps, message);
   }
 
   // Donde queda la tienda y horarios (datos fijos, la IA no los inventa).
@@ -1157,6 +1167,29 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     state.stage = pending;
     return `${text}\n\n${pending === "confirm" ? "Seguimos con tu pedido? 🛍️ Respóndeme *sí* para confirmarlo 💙" : questionFor(pending, deps)}`;
   };
+
+  // La IA leyo el historial y entendio algo que las reglas no (chats reales oct-2026:
+  // "A4" despues de pedir una resma, "Me puede atender", "Cuenta Pichincha").
+  if (!state.cart.length && state.stage !== "choosing") {
+    if (extraction.intent === "humano") {
+      return toHuman(state, "Claro! Te paso con una persona del equipo de Megaprinter 🙌 En breve te escribe por aquí 💙", "R2:humano_ia");
+    }
+    if (extraction.intent === "cuenta_bancaria" && deps.banks.length) return bankAccountsReply(state, deps, message);
+    if (extraction.intent === "servicio_tecnico") {
+      startTicket(state, "servicio_tecnico", extraction.searchQuery || message);
+      return askTicketNext(state, deps, "R10:servicio_ia", "Claro! Te ayudo con el servicio técnico 🛠️");
+    }
+    if (extraction.intent === "suministros") {
+      const asked = extraction.searchQuery || message;
+      if (asksInk(normalize(asked))) {
+        const inks = await offerInks(state, deps, asked, "R10:tintas_ia");
+        if (inks) return inks;
+      }
+      startTicket(state, "suministros", asked);
+      if (!state.ticket.issue) state.ticket.issue = asked.slice(0, 500);
+      return askTicketNext(state, deps, "R10:suministros_ia", "Claro! Te ayudo con eso 🧴 Lo cotizamos y un asesor te confirma precio y disponibilidad.");
+    }
+  }
 
   // Politica de Meta (2026): nada de asistente de proposito general. Solo Megaprinter.
   if (extraction.intent === "fuera_de_tema") {

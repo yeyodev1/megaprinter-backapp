@@ -818,6 +818,20 @@ async function main() {
     assert.equal(cleanAnswer("Qué chévere, Melanie! Te confirmo que todos nuestros precios ya incluyen IVA."), "Te confirmo que todos nuestros precios ya incluyen IVA.");
   });
 
+  await test("IA con historial: 'A4' completa la resma, asesor, cuenta y nombre que no es nombre", async () => {
+    const ai = (intent: string, searchQuery = "") => ({ intent, items: [], remove: [], searchQuery, suggestions: [], source: "ai" }) as any;
+    const fake = fakeDeps({ banks: FOUR_BANKS });
+    fake.deps.extract = async (message) =>
+      message === "A4" ? ai("suministros", "resma de papel A4") : message === "quiero que alguien me ayude" ? ai("humano") : message === "donde les pago" ? ai("cuenta_bancaria") : heuristicExtract(message, {} as any);
+    const a4 = await conversation(fake, ["A4", "Está misma", "Laura Pin", "sí"]);
+    assert.equal(a4[0].decision, "R10:suministros_ia");
+    assert.equal(a4[1].decision, "R10:ticket_nombre_invalido", "'Está misma' no es un nombre");
+    assert.match(a4[2].reply, /resma de papel A4/);
+    assert.equal(fake.tickets[0].type, "suministros");
+    assert.equal((await conversation(fake, ["quiero que alguien me ayude"]))[0].route, "human");
+    assert.equal((await conversation(fake, ["donde les pago"]))[0].decision, "R3:datos_cuenta");
+  });
+
   await test("menú numerado: el saludo muestra opciones y cada número lleva a su lugar", async () => {
     const [hello] = await conversation(fakeDeps(), ["hola"]);
     assert.match(hello.reply, /\*1\.\* 🖨️ Impresoras[\s\S]*\*5\.\* 🛠️ Servicio técnico[\s\S]*\*8\.\* 🙋 Hablar con un asesor/);

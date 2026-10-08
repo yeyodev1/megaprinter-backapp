@@ -5,6 +5,15 @@
     }
   },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index" }
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/reports/daily-email",
+      "schedule": "0 13 * * *"
+    }
   ]
 }

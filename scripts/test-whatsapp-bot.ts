@@ -799,6 +799,25 @@ async function main() {
     assert.equal(parts[0].decision, "R10:suministros", "repuestos se cotizan, no 'no vendemos'");
   });
 
+  await test("chats reales oct-08: cuenta del banco, asesor, resma, problemas de impresión, visita y menú suelto", async () => {
+    const one = async (message: string) => (await conversation(fakeDeps({ banks: FOUR_BANKS }), [message]))[0];
+    const pichincha = await one("Cuenta Pichincha");
+    assert.equal(pichincha.decision, "R3:datos_cuenta");
+    assert.match(pichincha.reply, /Banco Pichincha[\s\S]*2203005219/);
+    assert.doesNotMatch(pichincha.reply, /Banco Guayaquil/);
+    assert.match((await one("me pasas el numero de cuenta")).reply, /Banco Guayaquil[\s\S]*Banco Pichincha/);
+    assert.notEqual((await one("Quito, Pichincha")).decision, "R3:datos_cuenta", "provincia, no banco");
+    for (const message of ["puedo hablar no con un bot jeje", "Me puede atender"]) assert.equal((await one(message)).route, "human", message);
+    assert.equal((await one("a que hora atienden")).decision, "R8:tienda");
+    assert.equal((await one("Me puede enviar una resma")).decision, "R10:suministros");
+    assert.equal((await one("Hace 3 meses compramos una impresora XP 5200 pero hace 2 semanas ha tenido problemas para imprimir los colores y salen distorsionados")).decision, "R10:servicio_tecnico");
+    assert.equal((await one("Ya sería para ir en 1 hora a realizar la comprar")).decision, "R2:coordinar_visita");
+    assert.equal((await one("Envié dirección")).decision, "R2:coordinar_visita");
+    const bare = await conversation(fakeDeps(), ["hola", "4", "8"]);
+    assert.equal(bare[2].decision, "R2:menu_asesor", "un número suelto es del menú");
+    assert.equal(cleanAnswer("Qué chévere, Melanie! Te confirmo que todos nuestros precios ya incluyen IVA."), "Te confirmo que todos nuestros precios ya incluyen IVA.");
+  });
+
   await test("menú numerado: el saludo muestra opciones y cada número lleva a su lugar", async () => {
     const [hello] = await conversation(fakeDeps(), ["hola"]);
     assert.match(hello.reply, /\*1\.\* 🖨️ Impresoras[\s\S]*\*5\.\* 🛠️ Servicio técnico[\s\S]*\*8\.\* 🙋 Hablar con un asesor/);

@@ -99,7 +99,7 @@ Campos:
 - customerName: solo si escribe su nombre (o responde a "¿a nombre de quién?"). customerEmail: solo si escribe un correo.
 - address: dirección de entrega con ciudad, o "Retiro en tienda" si quiere retirar.
 - paymentMethod: "card" (tarjeta, link de pago, Payphone) o "transfer" (transferencia, depósito). null si no lo dice.
-- answer: SOLO con intent "pregunta". Hablas como Mila, el bot de Megaprinter (nunca digas que eres una persona): voz femenina, cercana, siempre amigable y con ganas de ayudar, nada formal, tuteas, usas 2 o 3 emojis. Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡"). Máximo 2 frases (un párrafo, sin listas ni viñetas), español de Ecuador. Puedes usar *negrita* de WhatsApp (asterisco al inicio y al final de la palabra). Basado EXCLUSIVAMENTE en el catálogo. Si devuelves suggestions, NO enumeres esos productos en answer: el sistema los muestra numerados debajo; solo explica el criterio (ej. "Para diseño te conviene un Core i7 o Ryzen 7 con 16 GB de RAM; estas son las mejores opciones:"). Si mencionas un precio, exacto del catálogo en formato $1234.56. Si el dato no está en el catálogo, dilo y ofrece pasar con un asesor. No pidas datos personales en answer.
+- answer: SOLO con intent "pregunta". Hablas como Mila, el bot de Megaprinter (nunca digas que eres una persona): voz femenina, cercana, siempre amigable y con ganas de ayudar, nada formal, tuteas, usas 2 o 3 emojis. Nunca digas "qué chévere", "qué onda" ni "chuta". Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡"). Máximo 2 frases (un párrafo, sin listas ni viñetas), español de Ecuador. Puedes usar *negrita* de WhatsApp (asterisco al inicio y al final de la palabra). Basado EXCLUSIVAMENTE en el catálogo. Si devuelves suggestions, NO enumeres esos productos en answer: el sistema los muestra numerados debajo; solo explica el criterio (ej. "Para diseño te conviene un Core i7 o Ryzen 7 con 16 GB de RAM; estas son las mejores opciones:"). Si mencionas un precio, exacto del catálogo en formato $1234.56. Si el dato no está en el catálogo, dilo y ofrece pasar con un asesor. No pidas datos personales en answer.
   · Datos de la tienda (úsalos tal cual, NUNCA inventes otras sucursales, ciudades ni redes): ${storeFactsForPrompt()}
   · NO inventes políticas: IVA, costo o tiempo de envío, garantía, diferidos, tiempos de reparación y stock de lo que no está en el catálogo los confirma un asesor. Sí se hacen envíos a otras ciudades de Ecuador (el costo lo confirma el equipo).
   · Si algo no está en el catálogo (repuestos, cargadores, cabezales, parlantes, otro modelo), di que no lo tienes en el catálogo y que un asesor puede cotizarlo. Nunca digas "solo vendemos X": vendemos laptops, all in one, monitores, impresoras, cámaras, tintas y suministros, y hacemos servicio técnico.
@@ -120,6 +120,8 @@ const catalogForPrompt = (catalog: BotProduct[]) =>
  */
 export function cleanAnswer(answer: string) {
   return answer
+    // Muletillas que el cliente pidio quitar: "Qué chévere, Melanie! Te confirmo…" → "Te confirmo…".
+    .replace(/(^|\n)\s*(qu[eé] (ch[eé]vere|onda)|chuta)[^.!?\n]*[.!?]+\s*/gi, "$1")
     .split("\n")
     .map((line) => {
       let text = line.replace(/^\s*[*-]\s+/, "• ");

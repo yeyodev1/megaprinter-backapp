@@ -16,7 +16,9 @@ export const isNo = (text: string) => has(text, /^(no+|nop|nel|todavia no|aun no
 export const isShortNo = (text: string) => isNo(text) && normalize(text).split(" ").length <= 3;
 
 export const wantsHuman = (text: string) =>
-  has(text, /\b(asesor|humano|persona|agente|alguien real|hablar con alguien|vendedor|reclamo|queja|estafa|devolucion|garantia)\b/);
+  has(text, /\b(asesor|humano|persona|agente|alguien real|hablar con alguien|vendedor|reclamo|queja|estafa|devolucion|garantia)\b/) ||
+  // Chats reales (oct-2026): "puedo hablar no con un bot jeje", "Me puede atender".
+  has(text, /\b(no (con )?(un |el )?bot|no quiero (hablar con )?(un |el )?bot|me (puede|pueden|podria|podrian) atender|atiendame|atenderme)\b/);
 
 export const wantsCatalog = (text: string) =>
   has(text, /\b(catalogo|que (productos )?tienen|que venden|productos|ofertas|lista de precios|menu)\b/);
@@ -77,11 +79,13 @@ export const claimsPaid = (text: string) =>
 
 /** Quiere servicio tecnico: reparar, mantenimiento, formateo, algo que falla. */
 export const wantsService = (text: string) =>
-  has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico|tiene problemas?|no detecta|no sale(n)? (todos )?(los )?colores)\b/);
+  has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico|tiene problemas?|no detecta|no sale(n)? (todos )?(los )?colores)\b/) ||
+  // "ha tenido problemas para imprimir los colores y salen distorsionados" (chat real).
+  has(text, /\b((ha|han|habia) tenido problemas?|tuvo problemas?|(esta|estan) dando problemas?|da problemas?|salen? (distorsionad|borros|manchad|rayad|corrid|en blanco)\w*|imprime (mal|borroso|corrido|manchado))\b/);
 
 /** Quiere suministros: tinta, toner, cartuchos, papel, repuestos. */
 export const wantsSupplies = (text: string) =>
-  has(text, /\b(suministro|suministros|tinta|tintas|toner|cartucho|cartuchos|botella de tinta|cinta|papel|repuesto|repuestos|consumible|consumibles|cargador|adaptador|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/);
+  has(text, /\b(suministro|suministros|tinta|tintas|toner|cartucho|cartuchos|botella de tinta|cinta|papel|resmas?|repuesto|repuestos|consumible|consumibles|cargador|adaptador|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/);
 
 /** Repuestos y accesorios que no estan en el catalogo: se cotizan como suministros. */
 export const PARTS = /\b(repuestos?|cargador(es)?|adaptador(es)?|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/;
@@ -90,6 +94,10 @@ export const PARTS = /\b(repuestos?|cargador(es)?|adaptador(es)?|cabezal(es)?|en
 export const asksStoreInfo = (text: string) =>
   has(text, /\b(ubicacion|ubicaciones|ubican|ubicados|donde (estan|quedan|queda|se encuentran|los encuentro)|direccion (de la tienda|del local|de su local|de sus locales|de ustedes)|su local|sus locales|sucursal(es)?|horarios?|a que hora (abren|cierran|atienden)|abren|cierran|atienden (los )?(sabados|domingos|hoy))\b/) ||
   has(text, /^(la )?direccion\??$/);
+
+/** Va a ir a la tienda o ya le mando datos a una persona: "ya seria para ir en 1 hora a realizar la compra", "envie direccion". */
+export const coordinatesVisit = (text: string) =>
+  has(text, /\b((para|voy a|vamos a|puedo|podemos) ir (a|al|en|hoy|manana|ahorita)|ir en \d+|envie (la |mi )?(direccion|ubicacion))\b/);
 
 /** Horario sin mas (para responder solo eso). */
 export const asksOnlyHours = (text: string) => has(text, /\b(horarios?|a que hora|abren|cierran)\b/) && !has(text, /\b(ubica|donde|direccion|local|sucursal)/);
@@ -103,6 +111,7 @@ export const followsUpCase = (text: string) =>
     text,
     /\b(deje (mi|el|la|una|un)|que deje|dejo mi|el tecnico dejo|retirar (el|la|mi) (equipo|maquina|laptop|impresora|computadora)|retiro de mi|alguna novedad|hay novedad(es)?|no me (han|ha) (dicho|respondido|contestado|escrito)|me dej(o|e) en visto|nome deje en visto|ya esta (lista|listo|reparad[ao])|cuanto(s)? dias (tarda|demora)|cuanto (tiempo )?(tarda|demora) la reparacion|codigo \d+|orden de (ingreso|servicio|trabajo)|quedara bien|esa contrasena|cancelar la diferencia)\b/,
   ) ||
+
   // "me confirma amiga", "me avisa", "me indica porfavor": solos, sin pedir un producto.
   (has(text, /^(me (confirma|avisa|indica)n?|confirmeme|me avisa para ir)\b/) && normalize(text).split(" ").length <= 5 && !has(text, /\b(precio|cuanto|tienen|hay)\b/));
 

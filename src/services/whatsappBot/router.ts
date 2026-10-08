@@ -3,7 +3,7 @@ import { detectBank } from "../banks";
 import { DEVICES, ServiceEstimate, detectDevice, deviceEmoji, deviceLabel, estimateService, priceText } from "./serviceCatalog";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, coordinatesVisit, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash } from "./intents";
 import { STORE, storeInfoText } from "./store";
 import { slugify } from "../../utils/slugify";
 
@@ -819,7 +819,9 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   state.menuShown = false;
 
   // Menu principal: "1"…"8" con el menu a la vista, o "menú" para verlo.
-  const menuChoice = menuShown && !state.options.length ? extractChoice(message, MENU.length) : null;
+  // Un numero suelto sin lista a la vista tambien es del menu ("8" para el asesor, chat real).
+  const bareNumber = state.stage === "idle" && !state.cart.length && /^\d$/.test(message.trim());
+  const menuChoice = (menuShown || bareNumber) && !state.options.length ? extractChoice(message, MENU.length) : null;
   if (menuChoice) {
     const item = MENU[menuChoice - 1];
     if (item.key === "asesor") {
@@ -856,6 +858,9 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   if (!midCheckout && followsUpCase(message)) {
     return toHuman(state, FOLLOW_UP_REPLY, "R2:seguimiento_caso");
   }
+  if (!midCheckout && coordinatesVisit(message)) {
+    return toHuman(state, "Perfecto! 🙌 Te paso con una persona del equipo para coordinar contigo. En breve te escribe por aquí 💙", "R2:coordinar_visita");
+  }
   // "me quedo con la opcion 1" sin opciones en este chat: se las dio un asesor.
   if (refersToOption(message) && !state.options.length) {
     return toHuman(state, "Te paso con la persona del equipo que te mostró esas opciones para cerrar tu compra 🙌 En breve te escribe por aquí 💙", "R2:opcion_de_asesor");
@@ -871,6 +876,21 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   // En "choosing" un "sí" elige la unica opcion (R5), no es relleno.
   if ((state.stage === "idle" || (state.stage === "choosing" && !isYes(message))) && !state.cart.length && isAck(message)) {
     return reply(state, "De una 😊 Aquí estoy para lo que necesites. Si quieres ver las opciones, escríbeme *menú* 💙", "R9:ok");
+  }
+
+  // "Cuenta Pichincha", "numero de cuenta": datos para transferir (chat real: el bot no lo entendia).
+  if (!state.cart.length && ["idle", "choosing", "ordered"].includes(state.stage) && deps.banks.length) {
+    const askedBank = /\b(cuentas?|transfer\w*|deposit\w*|banco)\b/.test(normalize(message)) ? detectBank(message, deps.banks) : null;
+    const asksAccounts = /\b(numero de cuenta|numeros de cuenta|datos (bancarios|para (transferir|depositar))|cuentas? (bancarias?|para (transferir|depositar))|a (que|cual) cuenta|donde (transfiero|deposito))\b/.test(normalize(message));
+    if (askedBank || asksAccounts) {
+      const accounts = askedBank ? [askedBank] : deps.banks;
+      const order = state.orderNumber ? ` del pedido *${state.orderNumber}*` : "";
+      return reply(
+        state,
+        `Claro! ${askedBank ? "Estos son los datos" : "Estas son nuestras cuentas"} para transferir 🏦\n\n${accounts.map(bankText).join("\n\n")}\n\nCuando transfieras, mándame por aquí la *foto del comprobante*${order} 📸 y el equipo valida tu pago 💙`,
+        "R3:datos_cuenta",
+      );
+    }
   }
 
   // Donde queda la tienda y horarios (datos fijos, la IA no los inventa).

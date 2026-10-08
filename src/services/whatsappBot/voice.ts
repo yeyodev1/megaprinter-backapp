@@ -47,6 +47,9 @@ export function keepsData(draft: string, rewritten: string) {
   );
 }
 
+/** Muletillas que el cliente pidio quitar (oct-2026): si la IA las usa, va el borrador. */
+export const BANNED = /ch[eé]vere|qu[eé] onda|\bchuta\b|no te cach[eé]/i;
+
 const VOICE_PROMPT = (name: string) => `Eres ${name}, el bot (agente virtual) de Megaprinter (tienda de tecnología en Ecuador) que atiende por WhatsApp. Mujer, súper amigable y cercana, tuteas, siempre con ganas de ayudar, nada formal, español de Ecuador, emojis.
 Te paso el BORRADOR del mensaje que vas a enviar y tus últimos mensajes. Reescribe el borrador para que suene natural y DISTINTO a tus mensajes anteriores (no repitas saludos, muletillas, aperturas ni emojis que ya usaste).
 Devuelve SOLO JSON: {"message":"..."}
@@ -58,7 +61,8 @@ Reglas estrictas:
 - Eres un bot y nunca lo ocultas: si el borrador dice "bot", tu mensaje también (con 🤖). Nunca digas ni insinúes que eres una persona.
 - Si el borrador te presenta como agente, mantén "agente", que puede pedirte "lo que necesites" y que lo ayudas "siempre".
 - Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡").
-- Igual de corto o más corto que el borrador. Nada de relleno.`;
+- Igual de corto o más corto que el borrador. Nada de relleno.
+- Nunca uses "qué chévere", "chévere verte por aquí", "qué onda", "chuta" ni "no te caché" (el cliente no las quiere).`;
 
 export async function naturalize(draft: string, recent: string[]): Promise<string> {
   if (!draft.trim()) return draft;
@@ -69,6 +73,6 @@ export async function naturalize(draft: string, recent: string[]): Promise<strin
     timeoutMs: 8000,
   });
   const message = typeof parsed?.message === "string" ? casualMarks(parsed.message.trim()) : "";
-  if (!message || message.length > draft.length * 1.3 + 60 || !keepsData(draft, message)) return draft;
+  if (!message || message.length > draft.length * 1.3 + 60 || !keepsData(draft, message) || BANNED.test(message)) return draft;
   return message;
 }

@@ -1,7 +1,7 @@
 import { BotEventModel } from "../models/botEvent.model";
 import { ServiceTicketModel } from "../models/serviceTicket.model";
 import { WhatsAppSessionModel } from "../models/whatsappSession.model";
-import { crmEnabled, firstAgentReply } from "./crm.service";
+import { crmEnabled, firstAgentReply, textKey } from "./crm.service";
 import { escapeHtml, sendEmail, storeRecipients } from "./email.service";
 
 /**
@@ -82,7 +82,11 @@ export async function buildAttentionReport(date = ecuadorDate()): Promise<Attent
     const at = new Date(handoff.createdAt);
     const after = mine.filter((event) => new Date(event.createdAt) > at);
     const insisted = after.some((event) => new Date(event.createdAt).getTime() - at.getTime() >= INSISTS_AFTER_MS);
-    const reply = await firstAgentReply(phone, at, new Date(Math.min(end.getTime() + 86400000, Date.now())));
+    const until = new Date(Math.min(end.getTime() + 86400000, Date.now()));
+    // Lo que mando Mila a este cliente: lo demas que diga "AGENT" en el CRM lo escribio una persona.
+    const botReplies: any[] = await BotEventModel.find({ phone, kind: "turn", createdAt: { $gte: new Date(at.getTime() - 86400000), $lte: until } }, { reply: 1 }).lean();
+    const botTexts = new Set(botReplies.map((event) => textKey(event.reply)).filter(Boolean));
+    const reply = await firstAgentReply(phone, at, until, botTexts);
     const status: HandoffStatus = reply ? (reply.at ? "atendido" : "sin_atender") : insisted ? "posible_sin_atender" : "sin_confirmar";
     handoffs.push({
       phone,

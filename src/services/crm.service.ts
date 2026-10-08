@@ -23,7 +23,7 @@ async function crmGet<T = any>(path: string, params: Record<string, unknown> = {
   try {
     const { data } = await axios.get(`${BASE()}${path}`, {
       params,
-      headers: { "X-Tenant-ID": TENANT(), "X-API-Key": process.env.BUILDERBOT_CRM_API_KEY!, "x-api-key": process.env.BUILDERBOT_CRM_API_KEY! },
+      headers: { "X-Tenant-ID": TENANT(), Authorization: `Bearer ${process.env.BUILDERBOT_CRM_API_KEY}` },
       timeout: 10000,
     });
     return data as T;
@@ -50,53 +50,63 @@ const samePhone = (a: unknown, b: unknown) => {
   return Boolean(x && y) && (x === y || x.slice(-9) === y.slice(-9));
 };
 
-const contactCache = new Map<string, { at: number; id: string | null }>();
+let contactsCache: { at: number; byPhone: Map<string, string> } | null = null;
 
-/** Id del contacto del CRM para un telefono (cache de 10 min). */
-export async function crmContactId(phone: string): Promise<string | null> {
-  const cached = contactCache.get(phone);
-  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.id;
-  let id: string | null = null;
-  // Primero filtrando; si el CRM ignora el filtro, se revisan las primeras paginas.
-  for (const params of [{ phone: digits(phone) }, { search: digits(phone) }, { q: digits(phone) }]) {
-    const found = rows(await crmGet("/contacts", { ...params, limit: 50 })).find((contact) => samePhone(contact.phone || contact.phone_number || contact.wa_id, phone));
-    if (found) {
-      id = String(found.id || found._id);
-      break;
-    }
+/** Telefono (ultimos 9 digitos) → id de contacto. El CRM no filtra por telefono: se pagina todo (cache 10 min). */
+async function contactsByPhone() {
+  if (contactsCache && Date.now() - contactsCache.at < 10 * 60 * 1000) return contactsCache.byPhone;
+  const byPhone = new Map<string, string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 40; page += 1) {
+    const payload: any = await crmGet("/contacts", { limit: 100, ...(cursor ? { cursor } : {}) });
+    if (!payload) break;
+    for (const contact of rows(payload)) if (digits(contact.phone)) byPhone.set(digits(contact.phone).slice(-9), String(contact.id));
+    cursor = payload.next_cursor || undefined;
+    if (!cursor) break;
   }
-  contactCache.set(phone, { at: Date.now(), id });
-  return id;
+  contactsCache = { at: Date.now(), byPhone };
+  return byPhone;
 }
 
-const messageDate = (message: any) => new Date(message.created_at || message.createdAt || message.timestamp || message.date || 0);
+export async function crmContactId(phone: string): Promise<string | null> {
+  return (await contactsByPhone()).get(digits(phone).slice(-9)) || null;
+}
+
+/** Clave para comparar textos del bot con los del CRM (sin emojis, espacios ni asteriscos). */
+export const textKey = (text: unknown) =>
+  String(text || "")
+    .normalize("NFD")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase()
+    .slice(0, 80);
 
 /**
- * Mensaje de una PERSONA del equipo (no del cliente ni del bot). El CRM marca
- * quien escribio con distintos campos segun la version; se aceptan los comunes.
+ * El CRM marca como "AGENT" tanto a Mila como a la persona que atiende. Es de
+ * una PERSONA si no es un texto que mando el bot (`botTexts`, de la bitacora).
  */
-export function isAgentMessage(message: any) {
-  const from = String(message.sender_type || message.senderType || message.author_type || message.role || message.direction || message.type || "").toLowerCase();
-  if (/bot|system|automat/.test(from) || message.is_bot === true) return false;
-  if (/agent|user|human|operator|staff|asesor/.test(from)) return true;
-  return Boolean(message.agent_id || message.assignee_id || message.user_id || message.sender_id) && !/contact|customer|incoming|inbound/.test(from);
+export function isHumanAgentMessage(message: any, botTexts: Set<string>) {
+  if (String(message.sender || "").toUpperCase() !== "AGENT" || message.is_private) return false;
+  const key = textKey(message.content);
+  if (!key) return message.message_type !== "TEXT"; // foto, audio o ubicacion que manda el asesor
+  return ![...botTexts].some((bot) => bot.startsWith(key.slice(0, 40)) || key.startsWith(bot.slice(0, 40)));
 }
 
 /**
- * Primera respuesta de una persona del equipo despues de `since`.
- * null = no se pudo saber (sin llave o CRM caido); { at: null } = nadie respondio.
+ * Primera respuesta de una persona del equipo entre `since` y `until`.
+ * null = no se pudo saber (sin llave, CRM caido o el contacto no esta en el CRM); { at: null } = nadie respondio.
  */
-export async function firstAgentReply(phone: string, since: Date, until: Date): Promise<{ at: Date | null } | null> {
+export async function firstAgentReply(phone: string, since: Date, until: Date, botTexts: Set<string>): Promise<{ at: Date | null } | null> {
   if (!crmEnabled()) return null;
   const contactId = await crmContactId(phone);
   if (!contactId) return null;
-  const conversations = rows(await crmGet("/conversations", { contact_id: contactId, limit: 20 }));
+  const conversations = rows(await crmGet("/conversations", { contact_id: contactId }));
+  if (!conversations.length) return null;
   let first: Date | null = null;
   for (const conversation of conversations) {
-    const messages = rows(await crmGet(`/conversations/${conversation.id || conversation._id}/messages`, { limit: 200 }));
+    const messages = rows(await crmGet(`/conversations/${conversation.id}/messages`, { limit: 500 }));
     for (const message of messages) {
-      const at = messageDate(message);
-      if (at >= since && at <= until && isAgentMessage(message) && (!first || at < first)) first = at;
+      const at = new Date(message.created_at);
+      if (at > since && at <= until && isHumanAgentMessage(message, botTexts) && (!first || at < first)) first = at;
     }
   }
   return { at: first };

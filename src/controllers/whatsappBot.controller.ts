@@ -7,6 +7,7 @@ import { notifyOrderCreated } from "../services/orderNotifications.service";
 import { geminiEnabled } from "../services/gemini.service";
 import { settleCardPayment } from "../services/payphone.service";
 import { createServiceTicket } from "../services/tickets.service";
+import { ServiceTicketModel } from "../models/serviceTicket.model";
 import { createAlert } from "../services/alerts.service";
 import { escapeHtml, sendEmail, storeRecipients } from "../services/email.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
@@ -624,6 +625,21 @@ export async function whatsappBotDecide(req: Request, res: Response) {
  * si no existe, al equipo) cuando un cliente pasa a un asesor. Lleva el link de
  * WhatsApp y los ultimos mensajes para responder sin buscar. Nunca bloquea.
  */
+/** Por que Mila paso el chat a una persona: asunto del correo y que hacer. */
+const HANDOFF_REASONS: Array<{ test: RegExp; title: string; todo: string }> = [
+  { test: /^R2:seguimiento_caso/, title: "🔁 Pregunta por su equipo o una compra", todo: "Revisa su orden en el taller o su compra y dile cómo va." },
+  { test: /^R10:ticket_creado/, title: "🛠️ Nueva solicitud de servicio o suministros", todo: "Revisa la solicitud, confirma precio y coordina con el cliente." },
+  { test: /^R10:ticket_a_asesor/, title: "🧾 No dio su nombre para la solicitud", todo: "Atiéndelo directo: no se pudo registrar la solicitud por el bot." },
+  { test: /^R2:ingles/, title: "🌐 Mensaje en inglés (posible proveedor)", todo: "Revisa si es un proveedor o un cliente extranjero." },
+  { test: /^R2:numero_contacto/, title: "📞 Pide un número de contacto", todo: "Pásale el número de la tienda o atiéndelo por aquí." },
+  { test: /^R2:coordinar_visita/, title: "🏪 Va a ir a la tienda", todo: "Coordina la visita y ten listo el producto." },
+  { test: /^R6:efectivo/, title: "💵 Quiere pagar en efectivo en la tienda", todo: "Sepárale el producto y coordina el pago en tienda." },
+  { test: /^R2:opcion_de_asesor/, title: "🛒 Eligió una opción que le dio un asesor", todo: "Cierra la venta con la opción que eligió." },
+  { test: /^R2:(acepta_asesor|humano|humano_ia|menu_asesor)/, title: "🙋 Pidió hablar con una persona", todo: "Respóndele lo antes posible." },
+];
+
+const CRM_URL = () => (process.env.BUILDERBOT_CRM_WEB || "https://62156346-df34-41ee-844c-666010c06787.crm.builderbot.cloud/").replace(/\/?$/, "/");
+
 async function notifyHandoff(phone: string, result: TurnResult, message: string) {
   try {
     const list = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -631,20 +647,41 @@ async function notifyHandoff(phone: string, result: TurnResult, message: string)
     const to = list(process.env.HANDOFF_EMAIL || "marilexich23@gmail.com");
     const cc = list(process.env.HANDOFF_CC || "selenamendoza100@gmail.com,jhnnmurillo@gmail.com").filter((email) => !to.includes(email));
     const session: any = await WhatsAppSessionModel.findOne({ phone }, { history: 1 }).lean();
-    const lines = (session?.history || [])
-      .slice(-10)
+    const history: any[] = session?.history || [];
+    // El mensaje de este turno puede no estar guardado aun en el historial.
+    const last = history.at(-1);
+    if (message && !(last?.role === "user" && String(last.content).trim() === message.trim())) history.push({ role: "user", content: message });
+    const lines = history
+      .slice(-12)
       .map((entry: any) => `<p style="margin:4px 0"><b>${entry.role === "user" ? "👤 Cliente" : "🤖 Mila"}:</b> ${escapeHtml(String(entry.content).slice(0, 500)).replace(/\n/g, "<br>")}</p>`)
       .join("");
-    const name = result.state.customerName || "Un cliente";
+    const state = result.state;
+    const name = state.customerName || "Un cliente";
     const digits = phone.replace(/\D/g, "");
-    const ticket = result.decision === "R10:ticket_creado" ? " (ticket de servicio)" : "";
-    const html = `<h2>🙋 ${escapeHtml(name)} necesita hablar con una persona${ticket}</h2>
-<p><b>Teléfono:</b> ${escapeHtml(phone)} · <a href="https://wa.me/${digits}">Abrir chat en WhatsApp</a></p>
-<p><b>Último mensaje:</b> "${escapeHtml(message.slice(0, 300))}"</p>
-<p>Mila ya le dijo que en breve le escriben por aquí. Respóndele desde BuilderBot (el bot queda en silencio en ese chat).</p>
+    const reason = HANDOFF_REASONS.find((item) => item.test.test(result.decision)) || { title: "🙋 Necesita una persona", todo: "Respóndele lo antes posible." };
+    const row = (label: string, value: string) => (value ? `<tr><td style="padding:4px 10px 4px 0;color:#666">${label}</td><td style="padding:4px 0"><b>${escapeHtml(value)}</b></td></tr>` : "");
+    const cart = state.cart.length ? state.cart.map((line) => `${line.quantity} × ${line.name} ($${(line.price * line.quantity).toFixed(2)})`).join(", ") : "";
+    const ticketNumber = result.decision === "R10:ticket_creado" ? result.reply.match(/ST-\d+/)?.[0] || "" : "";
+    const lastTicket: any = ticketNumber ? await ServiceTicketModel.findOne({ ticketNumber }).lean() : null;
+    const html = `<div style="font-family:Arial,sans-serif;font-size:15px;color:#222;max-width:680px">
+<h2 style="margin:0 0 6px">${reason.title}</h2>
+<p style="margin:0 0 14px;color:#555">👉 ${escapeHtml(reason.todo)}</p>
+<table style="border-collapse:collapse;font-size:15px">
+${row("Cliente", state.customerName)}${row("Teléfono", phone)}${row("Correo", state.customerEmail)}${row("Dijo", message.slice(0, 300))}
+${row("Carrito", cart)}${row("Pedido", state.orderNumber)}
+${row("Solicitud", lastTicket ? `${lastTicket.ticketNumber} · ${lastTicket.type === "suministros" ? "Suministros" : "Servicio técnico"}${lastTicket.device ? ` · ${lastTicket.device}` : ""}` : "")}
+${row("Problema / pedido", lastTicket?.issue || "")}
+${row("Precio referencial", lastTicket?.priceMin != null ? `$${lastTicket.priceMin} – $${lastTicket.priceMax}${lastTicket.category ? ` (${lastTicket.category})` : ""}` : "")}
+</table>
+<p style="margin:18px 0">
+<a href="https://wa.me/${digits}" style="background:#25d366;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:bold">Abrir chat en WhatsApp</a>
+&nbsp;<a href="${CRM_URL()}" style="background:#0c0c0e;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:bold">Responder en el CRM</a>
+</p>
+<p style="color:#555">Mila ya le dijo que en breve le escriben. El bot queda en silencio en ese chat mientras lo atiende una persona.</p>
 <h3>Conversación reciente</h3>${lines}
-<p><a href="https://megaprinter.ec/admin/bot?phone=${encodeURIComponent(phone)}">Ver en el panel</a></p>`;
-    const sent = await sendEmail(to.length ? to : storeRecipients(), `🙋 ${name} quiere hablar con un asesor (${phone})`, html, undefined, cc);
+<p>${lastTicket ? `<a href="https://megaprinter.ec/admin/tickets?ticket=${encodeURIComponent(lastTicket.ticketNumber)}">Abrir la solicitud ${escapeHtml(lastTicket.ticketNumber)}</a> · ` : ""}<a href="https://megaprinter.ec/admin/bot?phone=${encodeURIComponent(phone)}">Ver en el panel</a> · <a href="https://megaprinter.ec/admin/atencion">Reporte de atención</a></p></div>`;
+    const subject = `${reason.title}: ${name} (${phone})`;
+    const sent = await sendEmail(to.length ? to : storeRecipients(), subject, html, state.customerEmail || undefined, cc);
     if (!sent.ok) createAlert("email_failed", "No se pudo avisar por correo de un cliente que pidió asesor", `${phone}: ${sent.error || ""}`, `/admin/bot?phone=${encodeURIComponent(phone)}`);
   } catch (error) {
     console.error("[bot] no se pudo avisar del asesor:", error);

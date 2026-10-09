@@ -854,6 +854,43 @@ async function main() {
     assert.equal(menu.decision, "R9:menu");
   });
 
+  await test("chats reales oct-08/09: saludos raros, seguimientos, nombre con empresa, catálogo por categoría", async () => {
+    const decision = async (...messages: string[]) => (await conversation(fakeDeps(), messages)).at(-1)!.decision;
+    for (const hello of ["estimada buenas tardes", "Ola buenas tarde", "Bendiciones", "👋👋👋👋", "hola amiga como esta..."]) {
+      assert.match(await decision(hello), /^R9:saludo/, hello);
+    }
+    for (const followUp of [
+      "Hola muy buenas tardes q novedad me tiene",
+      "El día lunes compré una impresora canon",
+      "Buenas tardes, no me dan respuesta sobre mi maquina apenas puedan ayúdenme con la maquina la necesito para mi trabajo gracias.",
+      "La semana antepasada lleve mi impresora a un arreglo porque no agarraba el papel",
+    ]) {
+      assert.equal(await decision(followUp), "R2:seguimiento_caso", followUp);
+    }
+    // Nombre con la empresa: se toma el nombre; sin nombre dos veces pasa a una persona.
+    const named = await conversation(fakeDeps(), ["necesitamos el toner magenta para la Xerox 6515", "le escribe Juan Carlos Pérez de Tecnycomp"]);
+    assert.equal(named[1].state.customerName, "Juan Carlos Pérez");
+    const noName = await conversation(fakeDeps(), ["necesitamos el toner magenta para la Xerox 6515", "RUC 0992513837001", "otra cosa"]);
+    assert.equal(noName[2].route, "human");
+    // Proveedor en ingles: no se le pide el nombre en bucle.
+    assert.equal((await conversation(fakeDeps(), ["Good day boss! My name is Tonny from Shanghai which is a manufacturer of compatible toner, would you like more details?"]))[0].route, "human");
+    // "catálogo de laptop" muestra las laptops, no el resumen de la tienda.
+    const laptops = (await conversation(fakeDeps(), ["Hola, me puede ayudar con el catálogo de Laptop"]))[0];
+    assert.equal(laptops.decision, "R8:catalogo_laptops");
+    assert.match(laptops.reply, /Dell Inspiron/);
+    // Elige y luego "Ver el catálogo completo" de la misma lista al pedir el nombre.
+    const after = await conversation(fakeDeps(), ["laptop i7", "1", "2"]);
+    assert.equal(after[2].decision, "R5:catalogo_tras_elegir");
+    assert.equal(after[2].state.cart.length, 1);
+    // Kit / caja de mantenimiento es una pieza (suministros), no la revisión.
+    assert.equal(await decision("Kit de mantenimiento de la Epson l3260 tiene"), "R10:suministros");
+    assert.equal(await decision("Hola el costo de la caja de mantenimiento."), "R10:suministros");
+    // Pregunta en vez del problema: no se registra como problema.
+    assert.equal(await decision("hola", "5", "Leonardo Rodríguez", "1", "y eso cuanto demora?"), "R10:ticket_pregunta");
+    // "me pasas el numero de cuenta" sigue dando las cuentas.
+    assert.equal(await decision("me pasas el numero de cuenta"), "R3:datos_cuenta");
+  });
+
   console.log(`\n${passed} ok, ${failed} fallaron`);
   if (failed) process.exit(1);
 }

@@ -21,7 +21,7 @@ export const wantsHuman = (text: string) =>
   has(text, /\b(no (con )?(un |el )?bot|no quiero (hablar con )?(un |el )?bot|me (puede|pueden|podria|podrian) atender|atiendame|atenderme)\b/);
 
 export const wantsCatalog = (text: string) =>
-  has(text, /\b(catalogo|que (productos )?tienen|que venden|productos|ofertas|lista de precios|menu)\b/);
+  has(text, /\b(catal[oa]gos?|que (productos )?tienen|que venden|productos|ofertas|lista de precios|menu|proforma)\b/);
 
 export const wantsTracking = (text: string) =>
   has(text, /\b(mi pedido|mis pedidos|estado de(l)? pedido|mi orden|ya pague|ya transferi|cuando llega|seguimiento|numero de pedido|mp-?\d+)\b/);
@@ -29,8 +29,10 @@ export const wantsTracking = (text: string) =>
 export const wantsCancel = (text: string) =>
   has(text, /\b(cancela(r)?|ya no (lo )?quiero|olvidalo|vaciar( el)? carrito|borra(r)? (todo|el carrito))\b/);
 
+// Chats reales (oct-2026): "estimada buenas tardes", "Ola buenas tarde", "hola amiga como esta", "Bendiciones", "👋👋".
+const GREETING = /^((hola+|ola+|estimad[oa]s?|senor(a|ita)?|amig[oa]|muy|que tal)\s+)*(hola+|ola+|buen(os|as)?( (dias?|tardes?|noches?))?|buen dia|saludos|hey|que tal|bendiciones|como (esta|estas|le va))\b/;
 export const isGreeting = (text: string) =>
-  has(text, /^(hola+|buen(os|as)? (dias?|tardes?|noches?)|buenas|saludos|hey|que tal)\b/) && normalize(text).split(" ").length <= 5;
+  (has(text, GREETING) && normalize(text).split(" ").length <= 6) || /^[\s👋🙋🙌🤝😊🙂.!?‍♀♂️]+$/u.test(text.trim()) && /[👋🙋]/u.test(text);
 
 export function detectPaymentMethod(text: string): "card" | "transfer" | null {
   const value = normalize(text);
@@ -79,16 +81,20 @@ export const claimsPaid = (text: string) =>
 
 /** Quiere servicio tecnico: reparar, mantenimiento, formateo, algo que falla. */
 export const wantsService = (text: string) =>
-  has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico|tiene problemas?|no detecta|no sale(n)? (todos )?(los )?colores)\b/) ||
+  !has(text, MAINTENANCE_PART) &&
+  (has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico|tiene problemas?|no detecta|no sale(n)? (todos )?(los )?colores)\b/) ||
   // "ha tenido problemas para imprimir los colores y salen distorsionados" (chat real).
-  has(text, /\b((ha|han|habia) tenido problemas?|tuvo problemas?|(esta|estan) dando problemas?|da problemas?|salen? (distorsionad|borros|manchad|rayad|corrid|en blanco)\w*|imprime (mal|borroso|corrido|manchado))\b/);
+  has(text, /\b((ha|han|habia) tenido problemas?|tuvo problemas?|(esta|estan) dando problemas?|da problemas?|salen? (distorsionad|borros|manchad|rayad|corrid|en blanco)\w*|imprime (mal|borroso|corrido|manchado))\b/));
+
+/** Kit o caja de mantenimiento: es una pieza que se vende (suministro), no la revision del tecnico. */
+export const MAINTENANCE_PART = /\b(kit|caja|cajas|tanque) de mantenimiento|almohadillas?\b/;
 
 /** Quiere suministros: tinta, toner, cartuchos, papel, repuestos. */
 export const wantsSupplies = (text: string) =>
-  has(text, /\b(suministro|suministros|tinta|tintas|toner|cartucho|cartuchos|botella de tinta|cinta|papel|resmas?|repuesto|repuestos|consumible|consumibles|cargador|adaptador|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/);
+  has(text, /\b(suministro|suministros|tinta|tintas|toner|cartucho|cartuchos|botella de tinta|cinta|papel|resmas?|repuesto|repuestos|consumible|consumibles|cargador|adaptador|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/) || has(text, MAINTENANCE_PART);
 
 /** Repuestos y accesorios que no estan en el catalogo: se cotizan como suministros. */
-export const PARTS = /\b(repuestos?|cargador(es)?|adaptador(es)?|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder)\b/;
+export const PARTS = /\b(repuestos?|cargador(es)?|adaptador(es)?|cabezal(es)?|encoder|bateria|parlantes?|bisagra|fuente de poder|(kit|caja|cajas|tanque) de mantenimiento|almohadillas?)\b/;
 
 /** Donde queda la tienda / horarios. "direccion" sola tambien (fuera del paso de direccion). */
 export const asksStoreInfo = (text: string) =>
@@ -111,6 +117,14 @@ export const followsUpCase = (text: string) =>
     text,
     /\b(deje (mi|el|la|una|un)|que deje|dejo mi|el tecnico dejo|retirar (el|la|mi) (equipo|maquina|laptop|impresora|computadora)|retiro de mi|alguna novedad|hay novedad(es)?|no me (han|ha) (dicho|respondido|contestado|escrito)|me dej(o|e) en visto|nome deje en visto|ya esta (lista|listo|reparad[ao])|cuanto(s)? dias (tarda|demora)|cuanto (tiempo )?(tarda|demora) la reparacion|codigo \d+|orden de (ingreso|servicio|trabajo)|quedara bien|esa contrasena|cancelar la diferencia)\b/,
   ) ||
+  // "q novedad me tiene", "no me dan respuesta sobre mi maquina", "lleve mi impresora a un arreglo",
+  // "el dia lunes compre una impresora canon", "Orden 1241" (chats reales oct-2026).
+  has(
+    text,
+    /\b(novedad(es)?|no me (dan|dieron|han dado) (respuesta|razon)|(lleve|llevamos|deje|dejamos) (mi|la|el|una|un|nuestra) (impresora|laptop|maquina|equipo|computadora|pc|monitor|camara)|orden (n[or]?\.? ?)?\d{3,}|(mi|la) orden de)\b/,
+  ) ||
+  // Compra pasada sin contar una falla ("el dia lunes compre una impresora canon"); si cuenta la falla es servicio tecnico.
+  (has(text, /\b(le |la |lo )?(compre|compramos) (una|un|la|el|mi)? ?(impresora|laptop|equipo|maquina|monitor|camara|computadora)\b/) && !wantsService(text)) ||
 
   // "me confirma amiga", "me avisa", "me indica porfavor": solos, sin pedir un producto.
   (has(text, /^(me (confirma|avisa|indica)n?|confirmeme|me avisa para ir)\b/) && normalize(text).split(" ").length <= 5 && !has(text, /\b(precio|cuanto|tienen|hay)\b/));
@@ -135,7 +149,19 @@ export const wantsCash = (text: string) => has(text, /\b(efectivo|cash|pago en (
 
 /** Pregunta el precio de la revision / reparacion (el diagnostico es sin costo). */
 export const asksServicePrice = (text: string) =>
+  !has(text, MAINTENANCE_PART) &&
   has(text, /\b(precio|costo|cuanto|vale|cobran)\b.*\b(revision|diagnostico|reparacion|mantenimiento|arreglo|limpieza)\b|\b(revision|diagnostico|reparacion|mantenimiento)\b.*\b(precio|costo|cuanto|vale|cobran)\b/);
 
 /** "me quedo con la opcion 1" cuando el bot no mostro opciones: se las dio un asesor. */
 export const refersToOption = (text: string) => has(text, /\b(opcion|la numero|el numero)\s*\d\b/);
+
+/** Pide un numero de telefono para llamar o escribir ("me ayudas con el numero", "cual es el numero?"). */
+export const asksContactNumber = (text: string) =>
+  // "me pasas el numero de cuenta" son los datos para transferir, no un telefono.
+  !has(text, /\b(cuentas?|pedido|orden|ticket|cedula|ruc|serie)\b/) &&
+  (has(text, /\b(numero (de )?(telefono|celular|contacto|whatsapp|del cliente|de ustedes|de la tienda|del local|para llamar)|telefono (de|del) (la tienda|ustedes|local)|a que numero (llamo|escribo|me comunico)|me (ayuda|ayudas|da|das|pasa|pasas) (con )?(el|un|su) numero)\b/) ||
+  has(text, /^(y )?(cual|cual es) (el|su) numero\??$/));
+
+/** Escribe en ingles (proveedores, spam): el bot solo atiende en espanol, pasa a una persona. */
+export const looksEnglish = (text: string) =>
+  normalize(text).split(" ").filter((word) => /^(the|and|your|you|with|would|like|company|our|we|are|is|from|which|good|day|how|please|send|more|details|interested|cooperation)$/.test(word)).length >= 3;

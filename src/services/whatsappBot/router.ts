@@ -3,7 +3,7 @@ import { detectBank } from "../banks";
 import { DEVICES, ServiceEstimate, detectDevice, deviceEmoji, deviceLabel, estimateService, priceText } from "./serviceCatalog";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, coordinatesVisit, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, coordinatesVisit, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash, asksContactNumber, looksEnglish } from "./intents";
 import { STORE, storeInfoText } from "./store";
 import { slugify } from "../../utils/slugify";
 
@@ -43,7 +43,9 @@ export interface BotState {
   /** Pidio que no le escriban (queda registrado en la conversacion). */
   optOut: boolean;
   /** Solicitud de servicio tecnico o suministros en curso (la termina un asesor). */
-  ticket: { type: "servicio_tecnico" | "suministros" | ""; device: string; issue: string; stageBefore: Stage };
+  ticket: { type: "servicio_tecnico" | "suministros" | ""; device: string; issue: string; stageBefore: Stage; nameTries?: number };
+  /** Ultima lista numerada que se eligio: "3" al pedir el nombre puede ser "ver el catalogo" de esa lista. */
+  lastOptions?: Array<{ productId: string; name: string; price: number }>;
   orderId: string;
   orderNumber: string;
   lastQuestion: string;
@@ -355,6 +357,19 @@ const looksLikeName = (text: string) => {
   return /^[\p{L}][\p{L}' .-]{1,60}$/u.test(value) && value.split(/\s+/).length <= 5 && !isYes(value) && !isNo(value) && !isGreeting(value) && !notName;
 };
 
+/**
+ * "le escribe Juan Carlos Pérez de Tecnycomp", "A nombre de Eduardo Usca", "soy Ana Mora":
+ * el nombre sin la frase de presentacion ni la empresa (chats reales oct-2026).
+ */
+export function nameFrom(text: string): string {
+  const value = text.trim().replace(/[.,!]+$/, "");
+  const intro = value.match(/^(?:le |les |te )?(?:escribe|habla|saluda)\s+(.+)$|^(?:soy|me llamo|mi nombre es|a nombre de|de parte de)\s+(.+)$/i);
+  if (!intro) return looksLikeName(value) ? value.replace(/\s+/g, " ") : "";
+  // "... de Tecnycomp": la empresa al final (una sola palabra despues de "de").
+  const name = (intro[1] || intro[2]).replace(/\s+de\s+\S+$/i, (match, offset, whole) => (whole.split(/\s+/).length >= 4 ? "" : match)).trim();
+  return looksLikeName(name) ? name.replace(/\s+/g, " ") : "";
+}
+
 /** Aplica los datos que el cliente haya dado en cualquier momento (suelen mandar todo junto). */
 function applyCustomerData(state: BotState, extraction: Extraction, message: string, deps: BotDeps) {
   // "pago por Pichincha": transferencia a esa cuenta. Solo si se habla de pago:
@@ -457,7 +472,7 @@ function withPending(state: BotState, deps: BotDeps, text: string, decision: str
 }
 
 const FOLLOW_UP_REPLY =
-  "Te paso con una persona del equipo para que revise tu caso 🙌 Yo no tengo el estado de los equipos en el taller, pero en breve te escriben por aquí 💙";
+  "Te paso con una persona del equipo para que revise tu caso 🙌 Ellos tienen el detalle de tu equipo o tu compra y en breve te escriben por aquí 💙";
 
 /** Precio de la revision: el diagnostico es sin costo y se da el rango referencial. */
 function servicePriceText(message: string, catalog: BotProduct[]) {
@@ -686,8 +701,18 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
     return null;
   }
   if (state.stage === "ticket_name") {
-    if (!looksLikeName(text)) return reply(state, "Me pasas tu nombre y apellido? 😊", "R10:ticket_nombre_invalido");
-    state.customerName = text.replace(/\s+/g, " ");
+    const name = nameFrom(text);
+    if (!name) {
+      // Dos respuestas sin nombre ("RUC 099…", "ya me están atendiendo en el otro número"):
+      // no se insiste mas, pasa a una persona (en produccion el bot repetia la pregunta sin fin).
+      state.ticket.nameTries = (state.ticket.nameTries || 0) + 1;
+      if (state.ticket.nameTries >= 2 || /\b(ya me (estan|esta) atendiendo|otro numero)\b/.test(normalize(text))) {
+        leaveTicket();
+        return toHuman(state, "Te paso con una persona del equipo para que te ayude directamente 🙌 En breve te escribe por aquí 💙", "R10:ticket_a_asesor");
+      }
+      return reply(state, isYes(text) ? "Perfecto 😊 Para registrarla, me pasas tu nombre y apellido?" : "Me pasas tu nombre y apellido? 😊 (por ejemplo: Ana Pérez)", "R10:ticket_nombre_invalido");
+    }
+    state.customerName = name;
     return askTicketNext(state, deps, "R10:ticket_nombre");
   }
   if (state.stage === "ticket_device") {
@@ -698,6 +723,10 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
   }
   if (state.stage === "ticket_issue") {
     if (text.length < 3) return askTicketNext(state, deps, "R10:ticket_detalle_corto");
+    // "Cual es el número?": una pregunta, no el problema del equipo.
+    if (/\?\s*$/.test(text) && !describesIssue(text) && normalize(text).split(" ").length <= 6) {
+      return askTicketNext(state, deps, "R10:ticket_pregunta", "Eso te lo confirma una persona del equipo apenas registre tu solicitud 🙌");
+    }
     state.ticket.issue = text.slice(0, 500);
     return askTicketNext(state, deps, "R10:ticket_detalle");
   }
@@ -872,6 +901,16 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     return toHuman(state, `Claro! Te paso con una persona real del equipo de Megaprinter 🙌💙 En un ratito te escribe por aquí.${contact}`, offeredHuman && !wantsHuman(message) ? "R2:acepta_asesor" : "R2:humano");
   }
 
+  // Mensajes en ingles (proveedores que ofrecen productos): los ve una persona.
+  if (looksEnglish(message) && !midCheckout) {
+    return toHuman(state, "Thanks for your message! A member of the Megaprinter team will review it and reply here 🙌\n\nGracias por escribir! Una persona del equipo lo revisa y te responde por aquí 💙", "R2:ingles");
+  }
+  // "Me ayudas con el número?": el bot no tiene otro numero; si hay uno de soporte se da, si no pasa a una persona.
+  if (asksContactNumber(message)) {
+    if (deps.supportPhone) return reply(state, `Claro! Puedes escribir o llamar al *${deps.supportPhone}* 📞 También te atiendo por aquí 😊`, "R8:numero_contacto");
+    return toHuman(state, "Te paso con una persona del equipo para que te dé ese dato 🙌 En breve te escribe por aquí 💙", "R2:numero_contacto");
+  }
+
   // R2: sigue un caso que lleva una persona (equipo en el taller, "me confirma", "alguna novedad").
   if (!midCheckout && followsUpCase(message)) {
     return toHuman(state, FOLLOW_UP_REPLY, "R2:seguimiento_caso");
@@ -1022,10 +1061,37 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
       const current = byId.get(option.productId);
       // Precio vigente del catalogo, no el que se mostro hace horas.
       addToCart(state, current ? toOption(current) : option, 1);
+      state.lastOptions = state.options;
       state.options = [];
       return askNext(state, deps, `R5:eleccion_${choice}`, `Agregué *${option.name}* ✅\n\n${cartLines(state.cart)}\nTotal: *${money(cartTotal(state.cart))}*`);
     }
   }
+
+  // "3" al pedir el nombre justo despues de elegir: es otra opcion de la lista que acaba de ver
+  // (chats reales: eligen el producto y luego "Ver el catálogo completo").
+  const lastOptions = state.lastOptions || [];
+  if (lastOptions.length && ["name", "email", "address"].includes(state.stage) && /^\d{1,2}$/.test(message)) {
+    const picked = Number(message);
+    if (picked === lastOptions.length + 1) {
+      state.lastOptions = [];
+      return reply(state, `${catalogOverview(catalog, deps.storeUrl)}\n\nTu carrito queda guardado 🛒 ${questionFor(state.stage, deps)}`, "R5:catalogo_tras_elegir", { intent: "menu", route: "catalog" });
+    }
+    const option = lastOptions[picked - 1];
+    if (option) {
+      if (state.cart.some((line) => line.productId === option.productId)) {
+        return reply(state, `*${option.name}* ya está en tu carrito ✅ ${questionFor(state.stage, deps)}`, "R5:ya_en_carrito");
+      }
+      const current = byId.get(option.productId);
+      addToCart(state, current ? toOption(current) : option, 1);
+      return askNext(state, deps, `R5:eleccion_extra_${picked}`, `Agregué también *${option.name}* ✅\n\n${cartLines(state.cart)}\nTotal: *${money(cartTotal(state.cart))}*`);
+    }
+  }
+  if (!["name", "email", "address"].includes(state.stage)) state.lastOptions = [];
+
+  // Solo un saludo ("estimada buenas tardes", "Ola buenas tarde"): se saluda sin pasar por la IA
+  // (en produccion la IA a veces lo tomaba como algo que no entendia).
+  const onlyGreeting = isGreeting(message) && !normalize(message).replace(/\b(hola+|ola+|estimad[oa]s?|senor(a|ita)?|amig[oa]s?|muy|que|tal|buen(os|as)?|dias?|tardes?|noches?|saludos|hey|bendiciones|como|esta|estas|le|va)\b/g, "").replace(/[^a-z0-9]/g, "");
+  if (onlyGreeting && state.stage === "idle" && !state.cart.length) return greet(state);
 
   // Desde aqui se necesita entender el mensaje.
   const extraction = await deps.extract(message, {
@@ -1201,6 +1267,13 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   }
 
   if (extraction.intent === "catalogo") {
+    // "catálogo de laptop", "catálogos de la impresora": se muestra esa categoria, no el resumen general.
+    const CATEGORY_WORDS: Record<string, RegExp> = { impresoras: /\bimpresora/, laptops: /\b(laptops?|lap ?tops?|lactos?|lapton|computadoras?|portatil(es)?)\b/, monitores: /\bmonitor/, camaras: /\bcamara/ };
+    const category = MENU.find((item) => CATEGORY_WORDS[item.key]?.test(normalize(message)));
+    if (category && "categories" in category && pending === "idle") {
+      const products = catalog.filter((product) => product.kind !== "service" && category.categories.test(normalize(product.category))).sort((a, b) => a.price - b.price);
+      if (products.length) return showOptions(state, products.slice(0, 8), `R8:catalogo_${category.key}`, `Estas son nuestras ${category.label.replace(/^\S+\s/, "").toLowerCase()} 👇 (de menor a mayor precio)`);
+    }
     return reply(state, resume(catalogOverview(catalog, deps.storeUrl)), "R8:catalogo", { intent: "menu", route: "catalog" });
   }
 
@@ -1227,10 +1300,14 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   // R9: saludo o algo que no se entendio: se retoma el paso pendiente.
   if (isGreeting(message) && !state.cart.length) return greet(state);
   if (state.stage === "choosing") {
-    return reply(state, "No te entendí 🙏 Responde con el número de la opción que quieres, o dime qué otra cosa buscas.", "R9:eleccion_no_entendida");
+    return reply(state, "Para elegir, respóndeme con el *número* de la opción 😊 Si buscas otra cosa, cuéntamelo con otras palabras, o escribe *asesor* y te atiende una persona 🙋", "R9:eleccion_no_entendida");
   }
   // Algo que no se entendio sin pedido a medias: se ofrece una persona en vez de repetir el menu.
   if (!state.cart.length) {
+    // Un mensaje largo que no se entendio suele ser un caso real: se ofrece una persona (un "sí" la acepta).
+    if (normalize(message).split(" ").length >= 7) {
+      return reply(state, `Quiero ayudarte bien con esto 🙌 Te paso con una persona del equipo? Respóndeme *sí*, o elige una opción:\n\n${MENU_LIST}`, "R9:no_entendido_ofrece_asesor");
+    }
     return reply(state, `Uy, no te entendí bien 🙈 ${ASK_PRODUCT}`, "R9:no_entendido");
   }
   return askNext(state, deps, "R9:siguiente_paso");

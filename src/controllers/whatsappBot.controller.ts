@@ -638,6 +638,7 @@ const HANDOFF_REASONS: Array<{ test: RegExp; title: string; todo: string }> = [
   { test: /^R2:coordinar_visita/, title: "🏪 Va a ir a la tienda", todo: "Coordina la visita y ten listo el producto." },
   { test: /^R6:efectivo/, title: "💵 Quiere pagar en efectivo en la tienda", todo: "Sepárale el producto y coordina el pago en tienda." },
   { test: /^R2:opcion_de_asesor/, title: "🛒 Eligió una opción que le dio un asesor", todo: "Cierra la venta con la opción que eligió." },
+  { test: /^R2:no_esta_en_catalogo/, title: "🔎 Busca algo que no está en el catálogo", todo: "Revisa stock y precio y respóndele (el bot no le dio valores)." },
   { test: /^R2:(acepta_asesor|humano|humano_ia|menu_asesor)/, title: "🙋 Pidió hablar con una persona", todo: "Respóndele lo antes posible." },
 ];
 

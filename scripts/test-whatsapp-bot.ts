@@ -380,7 +380,8 @@ async function main() {
     assert.equal(results[2].step, "ticket_name", "el nombre va al final");
     const summary = results[3];
     assert.equal(summary.step, "ticket_confirm");
-    assert.match(summary.reply, /Servicio técnico[\s\S]*Impresora[\s\S]*no imprime[\s\S]*\$20 – \$35[\s\S]*diagnóstico es sin costo/);
+    assert.match(summary.reply, /Servicio técnico[\s\S]*Impresora[\s\S]*no imprime[\s\S]*diagnóstico es sin costo/);
+    assert.doesNotMatch(summary.reply, /\$/, "el bot no da precios de reparación (Johnny, 15-oct)");
     const done = results[4];
     assert.equal(done.decision, "R10:ticket_creado");
     assert.equal(done.route, "human");
@@ -395,7 +396,7 @@ async function main() {
     const results = await conversation(fake, ["mi laptop está muy lenta, necesito formatear", "Eva Ruiz"]);
     assert.equal(results[0].step, "ticket_name");
     assert.equal(results[1].step, "ticket_confirm", "ya sabía el equipo y el problema");
-    assert.match(results[1].reply, /Laptop[\s\S]*\$25 – \$40/);
+    assert.match(results[1].reply, /Laptop[\s\S]*formatear/);
   });
 
   await test("'servicio técnico para mi impresora' no es la descripción; 'no imprime' en el resumen es detalle, no un 'no'", async () => {
@@ -980,6 +981,22 @@ async function main() {
     assert.match(midTicket[1].reply, /maps\.app\.goo\.gl[\s\S]*nombre/, "da la dirección y sigue con el ticket");
     const [catalog] = await conversation(fakeDeps(), ["hola", "7"]).then((r) => r.slice(1));
     assert.match(catalog.reply, /Catálogo completo[\s\S]*\/products/);
+  });
+
+  await test("audios de Johnny 15-oct: sin precios de reparación y lo que no está en catálogo va a un asesor", async () => {
+    const price = (await conversation(fakeDeps(), ["cuanto cuesta la revisión de mi laptop"]))[0];
+    assert.match(price.reply, /sin costo/);
+    assert.doesNotMatch(price.reply, /\$/, "sin valores");
+    const fake = fakeDeps();
+    fake.deps.extract = async (message) => ({ ...(await heuristicExtract(message, {} as any)), intent: "fuera_de_tema" });
+    const keyboard = (await conversation(fake, ["Ando buscado un teclado ergonómico"]))[0];
+    assert.equal(keyboard.decision, "R2:no_esta_en_catalogo");
+    assert.equal(keyboard.route, "human");
+    assert.match(keyboard.reply, /comunicándote con un asesor/);
+    assert.equal((await conversation(fake, ["No tiene eso"]))[0].route, "human");
+    assert.equal((await conversation(fake, ["hazme la tarea de historia"]))[0].decision, "R8:fuera_de_tema", "lo que no es del negocio sigue redirigido");
+    const missing = (await conversation(fakeDeps(), ["quiero un proyector epson"]))[0];
+    assert.equal(missing.decision, "R2:no_esta_en_catalogo");
   });
 
   console.log(`\n${passed} ok, ${failed} fallaron`);

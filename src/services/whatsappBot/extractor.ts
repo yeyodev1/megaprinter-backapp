@@ -111,7 +111,7 @@ Campos:
   · Nunca afirmes specs, compatibilidades ni ampliaciones (RAM, disco) que no estén escritas en el catálogo, ni digas que algo "no se vende suelto": eso lo confirma un asesor. Si dices "estas son las opciones" o "te muestro", DEBES llenar suggestions; si no hay productos que mostrar, no lo digas.
   · No hables de pedidos, compras ni números de pedido si el cliente no los mencionó.
   · NO inventes políticas: IVA, costo o tiempo de envío, garantía, diferidos, tiempos de reparación y stock de lo que no está en el catálogo los confirma un asesor. Sí se hacen envíos a otras ciudades de Ecuador (el costo lo confirma el equipo).
-  · Si algo no está en el catálogo (repuestos, cargadores, cabezales, parlantes, otro modelo), di que no lo tienes en el catálogo y que un asesor puede cotizarlo. Nunca digas "solo vendemos X": vendemos laptops, all in one, monitores, impresoras, cámaras, tintas y suministros, y hacemos servicio técnico.
+  · Si piden un producto, accesorio o repuesto que NO está en el catálogo (teclado ergonómico, placa madre, cargador, otro modelo), NO uses "pregunta": usa intent "humano" (lo atiende un asesor). Nunca des precios de reparaciones, repuestos ni de nada que no esté en el catálogo. Nunca digas "solo vendemos X": vendemos laptops, all in one, monitores, impresoras, cámaras, tintas y suministros, y hacemos servicio técnico.
 - Usa la pregunta anterior del bot y el historial para interpretar respuestas cortas ("la segunda", "esa", "sí").
 - Todo lo que no aplique va null, "" o [].`;
 

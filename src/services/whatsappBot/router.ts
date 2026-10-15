@@ -479,20 +479,25 @@ function withPending(state: BotState, deps: BotDeps, text: string, decision: str
   return reply(state, `${text}\n\n${pending === "confirm" ? "Seguimos con tu pedido? 🛍️ Respóndeme *sí* para confirmarlo 💙" : questionFor(pending, deps)}`, decision);
 }
 
+/** Producto, accesorio o repuesto que no esta en el catalogo: pasa a un asesor (texto que pidio Johnny, 15-oct). */
+const NOT_IN_CATALOG_REPLY = "Perfecto 🙌 Ya te ayudo comunicándote con un asesor para que te brinde la mejor información. En breve te escribe por aquí 💙";
+const TECH_WORDS =
+  /\b(teclados?|mouse|raton|audifonos?|auriculares?|parlantes?|bocinas?|cables?|cargador(es)?|adaptador(es)?|memorias?|discos?|ssd|usb|pendrive|tablets?|celular(es)?|telefonos?|tv|televisor|proyector(es)?|ups|router|modem|switch|mochilas?|fundas?|forros?|carcasas?|pantallas?|placa|tarjeta (madre|grafica|de video)|procesador(es)?|webcam|camara web|microfonos?|scanner|escaner|toner|tinta|papel|resma|repuestos?|accesorios?|ergonomic\w*|gamer|bateria|baterias)\b/;
+
 const SERVICE_INFO =
   "Claro! 🛠️ Reparamos y damos mantenimiento a laptops, computadoras, impresoras, monitores y cámaras. El *diagnóstico es sin costo* y el técnico te confirma el precio antes de reparar.";
 
 const FOLLOW_UP_REPLY =
   "Te paso con una persona del equipo para que revise tu caso 🙌 Ellos tienen el detalle de tu equipo o tu compra y en breve te escriben por aquí 💙";
 
-/** Precio de la revision: el diagnostico es sin costo y se da el rango referencial. */
-function servicePriceText(message: string, catalog: BotProduct[]) {
-  const device = detectDevice(message);
-  if (device) {
-    const estimate = estimateService(device, message, catalog);
-    return `El diagnóstico es *sin costo* 🙌 Para tu ${deviceLabel(device).toLowerCase()} el precio referencial es ${priceText(estimate)} (${estimate.label.toLowerCase()}); el técnico te confirma el precio final.`;
-  }
-  return "El diagnóstico es *sin costo* 🙌 Como referencia, la revisión de una impresora va de $15 a $35 y la de una laptop de $20 a $60; el técnico te confirma el precio final.";
+/**
+ * Precio de la revision: el diagnostico es sin costo y el precio lo da el tecnico.
+ * Johnny (15-oct): el bot NO da valores de reparaciones ni repuestos; si luego el
+ * precio cambia el cliente se confunde ("me dijeron otro valor"). El rango
+ * referencial solo queda en el ticket para el equipo.
+ */
+function servicePriceText(_message: string, _catalog: BotProduct[]) {
+  return "El diagnóstico es *sin costo* 🙌 El precio de la reparación te lo confirma un asesor después de que el técnico revise tu equipo.";
 }
 
 /** Pregunta por lo que falta (o muestra el resumen), con un prefijo opcional. */
@@ -663,7 +668,6 @@ function ticketSummary(state: BotState, deps: BotDeps, catalog: BotProduct[]) {
       "La registro y te paso con un asesor? Respóndeme *sí* ✅",
     ].join("\n");
   }
-  const estimate = estimateService(state.ticket.device, state.ticket.issue, catalog);
   return [
     "Perfecto, armé tu solicitud 🛠️",
     "",
@@ -671,8 +675,7 @@ function ticketSummary(state: BotState, deps: BotDeps, catalog: BotProduct[]) {
     `${deviceEmoji(state.ticket.device)} Equipo: ${deviceLabel(state.ticket.device)}`,
     `📝 Problema: ${state.ticket.issue}`,
     ...(state.customerName ? [`👤 ${state.customerName}`] : []),
-    `💲 Precio referencial: ${priceText(estimate)} (${estimate.label.toLowerCase()})`,
-    "_El diagnóstico es sin costo y el técnico te confirma el precio._",
+    "_El diagnóstico es sin costo; el precio te lo confirma un asesor después de revisar el equipo._",
     "",
     "La registro y te paso con un asesor? Respóndeme *sí* ✅",
   ].join("\n");
@@ -1166,7 +1169,11 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   }
   // Solo su nombre ("Soy jaime giler", "Shirley Jiménez"): se guarda y se le pregunta qué busca.
   if (state.stage === "idle" && !state.cart.length && normalize(message).split(" ").length <= 5) {
-    const name = /^(soy|me llamo|mi nombre es)\b/i.test(message) || (/^\p{Lu}/u.test(message) && message.trim().split(/\s+/).length >= 2) ? nameFrom(message) : "";
+    // Sin "soy…" solo cuenta si TODAS las palabras van con mayúscula ("Shirley Jiménez"):
+    // "Ando buscado un teclado ergonómico" no es un nombre.
+    const words = message.trim().split(/\s+/);
+    const properName = words.length >= 2 && words.length <= 4 && words.every((word) => /^\p{Lu}/u.test(word));
+    const name = (/^(soy|me llamo|mi nombre es)\b/i.test(message) || properName) && !TECH_WORDS.test(normalize(message)) ? nameFrom(message) : "";
     if (name && !searchProducts(catalog, message).length) {
       state.customerName = name;
       return reply(state, `Mucho gusto, ${name.split(" ")[0]} 😊\n\n${ASK_PRODUCT}`, "R9:nombre");
@@ -1318,7 +1325,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   // "A4" despues de pedir una resma, "Me puede atender", "Cuenta Pichincha").
   if (!state.cart.length && state.stage !== "choosing") {
     if (extraction.intent === "humano") {
-      return toHuman(state, "Claro! Te paso con una persona del equipo de Megaprinter 🙌 En breve te escribe por aquí 💙", "R2:humano_ia");
+      return toHuman(state, NOT_IN_CATALOG_REPLY, "R2:humano_ia");
     }
     if (extraction.intent === "cuenta_bancaria" && deps.banks.length) return bankAccountsReply(state, deps, message);
     if (extraction.intent === "servicio_tecnico") {
@@ -1338,6 +1345,11 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   }
 
   // Politica de Meta (2026): nada de asistente de proposito general. Solo Megaprinter.
+  // Algo de tecnologia que no esta en el catalogo ("teclado ergonómico", "No tiene eso"): lo atiende un asesor,
+  // nunca "eso se me escapa" (Johnny, 15-oct).
+  if (extraction.intent === "fuera_de_tema" && (TECH_WORDS.test(normalize(message)) || /\b(tiene|tienen|hay|venden|busco|buscando|necesito)\b/.test(normalize(message)))) {
+    return toHuman(state, NOT_IN_CATALOG_REPLY, "R2:no_esta_en_catalogo");
+  }
   if (extraction.intent === "fuera_de_tema" && !/^\d{1,3}$/.test(message.trim())) {
     return reply(
       state,
@@ -1369,6 +1381,8 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     const found = suggested.length ? suggested : searchProducts(catalog, extraction.searchQuery || message);
     if (found.length) return showOptions(state, found, "R8:busqueda");
     if (extraction.intent !== "otro") {
+      // Sin pedido a medias: lo que no esta en el catalogo lo atiende un asesor (Johnny, 15-oct).
+      if (pending === "idle") return toHuman(state, NOT_IN_CATALOG_REPLY, "R2:no_esta_en_catalogo");
       return reply(
         state,
         resume(`No encontré eso en el catálogo 🤔 Prueba con otras palabras (marca, procesador, tipo de impresora) o pídeme el *catálogo*. Si buscas algo especial, escribe *asesor* y te ayuda una persona.`),

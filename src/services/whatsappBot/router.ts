@@ -622,7 +622,7 @@ const ISSUE_WORDS = /\b(imprime|rayas?|atasca|enciende|prende|lenta|lento|calien
 const describesIssue = (text: string) => wantsService(text) || ISSUE_WORDS.test(normalize(text));
 
 /** Cuenta una falla concreta (no "me interesa el servicio tecnico, más info"). */
-const ISSUE_DETAIL = /\b(no (imprime|enciende|prende|carga|funciona|detecta|reconoce|sale|vota|bota|da|jala|agarra|lee|arranca)|dan(o|ad[oa])|roto|rota|rajad[oa]|quebrad[oa]|falla|problemas?|virus|cambio de|cambiar|formate\w*|mantenimiento|limpieza|se apaga|se reinicia|se calienta|se traba|lent[oa]|ruido|rayas?|manchas?|corto|mojad[oa]|liquido|memoria|disco|solido|pantalla|bisagra|teclado|bateria|carcasa|pin de carga)\b/;
+const ISSUE_DETAIL = /\b(no (imprime|enciende|prende|carga|funciona|detecta|reconoce|sale|vota|bota|da|jala|agarra|lee|arranca)|dan(o|ad[oa])|roto|rota|rajad[oa]|quebrad[oa]|falla|problemas?|virus|cambio de|cambiar|formate\w*|mantenimiento|limpieza|se apaga|se reinicia|se calienta|se traba|lent[oa]|ruido|rayas?|manchas?|corto|mojad[oa]|liquido|memoria|disco|solido|pantalla|bisagra|teclado|bateria|carcasa|pin de carga|placa|tarjeta madre|no vale|no sirve|dejo de)\b/;
 
 /** Quedan al menos 2 palabras que no son saludo, relleno ni el nombre del equipo (sirve para suministros: "toner magenta Xerox 6515"). */
 function describesNeed(message: string) {

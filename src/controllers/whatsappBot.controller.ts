@@ -504,7 +504,7 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
     // sus ultimos mensajes). Con BOT_AI_VOICE=off se envia la plantilla tal cual.
     // El saludo y el menu van tal cual (texto acordado con el cliente): la IA les
     // metia "qué chévere verte por aquí" y ejemplos que el cliente no pidio.
-    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && !/^R9:(saludo|menu)|^R8:(tienda|catalogo)|^R5:(menu_catalogo|catalogo_completo)/.test(result.decision)) {
+    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && !/^R9:(saludo|menu)|^R8:(tienda|catalogo)|^R5:(menu_catalogo|catalogo_completo)|^R10:|^R2:/.test(result.decision)) {
       const lastBotMessages = history.filter((entry: any) => entry.role === "assistant").slice(-3).map((entry: any) => String(entry.content));
       result.reply = await naturalize(result.reply, lastBotMessages);
     }

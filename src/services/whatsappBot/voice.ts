@@ -52,6 +52,8 @@ export function keepsData(draft: string, rewritten: string) {
   if (newFacts.length) return false;
   const newNumbers = (rewritten.match(/\d+/g) || []).filter((number) => !draft.includes(number));
   if (newNumbers.length) return false;
+  // Si el borrador pregunta algo, la version de la IA tambien (oct-15 se comio "A nombre de quién la registro?").
+  if (draft.includes("?") && !rewritten.includes("?")) return false;
   return (
     protectedLines(draft).every((line) => output.includes(line)) &&
     protectedTokens(draft).every((token) => rewritten.includes(token)) &&

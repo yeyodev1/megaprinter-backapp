@@ -1,28 +1,46 @@
 import { NextFunction, Request, Response } from "express";
-import { AdminRequest } from "../middlewares/admin.middleware";
+import { Types } from "mongoose";
+import { AdminRequest, actorName } from "../middlewares/admin.middleware";
 import { TICKET_STATUSES, ServiceTicketModel } from "../models/serviceTicket.model";
+import { UserModel } from "../models/user.model";
 import { AlertModel } from "../models/alert.model";
 import { summarizeTicket } from "../services/tickets.service";
 
-/** GET /api/tickets?status=&type= */
-export async function listTickets(req: Request, res: Response, next: NextFunction) {
+/** GET /api/tickets?status=&type=&mine=1 */
+export async function listTickets(req: AdminRequest, res: Response, next: NextFunction) {
   try {
     const filter: Record<string, unknown> = {};
     if (typeof req.query.status === "string" && req.query.status) filter.status = req.query.status;
     if (typeof req.query.type === "string" && req.query.type) filter.type = req.query.type;
+    if (req.query.mine === "1" && req.admin?.id) filter.assignedToId = req.admin.id;
     res.json(await ServiceTicketModel.find(filter).sort({ createdAt: -1 }).limit(300).lean());
   } catch (error) {
     next(error);
   }
 }
 
-/** PATCH /api/tickets/:id { status?, note?, finalPrice?, assignedTo? } */
+/** GET /api/tickets/assignees — accesos activos a los que un admin puede asignar tickets. */
+export async function listAssignees(_req: AdminRequest, res: Response, next: NextFunction) {
+  try {
+    const users = await UserModel.find({ active: { $ne: false } }).select("name role").sort({ role: -1, name: 1 }).lean();
+    res.json(users.map((user) => ({ id: String(user._id), name: user.name, role: user.role || "admin" })));
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PATCH /api/tickets/:id { status?, note?, finalPrice?, assignedToId?, assignedTo? }
+ * El tecnico puede mover el estado, dejar notas y tomar o soltar el ticket para
+ * si mismo. Precio final y asignar a otra persona quedan para los admins.
+ */
 export async function updateTicket(req: AdminRequest, res: Response, next: NextFunction) {
   try {
     const ticket = await ServiceTicketModel.findById(req.params.id);
     if (!ticket) return res.status(404).json({ error: "Ticket no encontrado" });
-    const by = req.admin?.email || "";
-    const { status, note, finalPrice, assignedTo } = req.body ?? {};
+    const by = actorName(req);
+    const isAdmin = req.admin?.role === "admin";
+    const { status, note, finalPrice, assignedTo, assignedToId } = req.body ?? {};
     if (status !== undefined) {
       if (!TICKET_STATUSES.includes(status)) return res.status(400).json({ error: "Estado no válido" });
       if (status !== ticket.status) {
@@ -32,11 +50,39 @@ export async function updateTicket(req: AdminRequest, res: Response, next: NextF
     }
     if (typeof note === "string" && note.trim()) ticket.notes.push({ text: note.trim().slice(0, 1000), by, at: new Date() });
     if (finalPrice !== undefined) {
+      if (!isAdmin) return res.status(403).json({ error: "Solo un administrador puede cambiar el precio final" });
       const value = finalPrice === null || finalPrice === "" ? null : Number(finalPrice);
       if (value !== null && (!Number.isFinite(value) || value < 0)) return res.status(400).json({ error: "Precio no válido" });
       ticket.finalPrice = value;
     }
-    if (typeof assignedTo === "string") ticket.assignedTo = assignedTo.trim().slice(0, 120);
+
+    if (assignedToId !== undefined) {
+      const current = ticket.assignedToId ? String(ticket.assignedToId) : "";
+      const target = assignedToId ? String(assignedToId) : "";
+      if (!isAdmin && target !== req.admin?.id && !(target === "" && current === req.admin?.id)) {
+        return res.status(403).json({ error: "Solo puedes tomar o soltar tus propios tickets" });
+      }
+      if (target !== current) {
+        let name = "";
+        if (target) {
+          if (!Types.ObjectId.isValid(target)) return res.status(400).json({ error: "Técnico no válido" });
+          const assignee = await UserModel.findOne({ _id: target, active: { $ne: false } }).select("name").lean();
+          if (!assignee) return res.status(400).json({ error: "Ese técnico no existe o está desactivado" });
+          name = assignee.name;
+        }
+        ticket.set("assignedToId", target || null);
+        ticket.assignedTo = name;
+        ticket.assignHistory.push({ to: name, by, at: new Date() });
+      }
+    } else if (typeof assignedTo === "string" && isAdmin) {
+      // Compatibilidad: nombre en texto libre, sin acceso vinculado.
+      const name = assignedTo.trim().slice(0, 120);
+      if (name !== ticket.assignedTo) {
+        ticket.assignedTo = name;
+        ticket.set("assignedToId", null);
+        ticket.assignHistory.push({ to: name, by, at: new Date() });
+      }
+    }
     await ticket.save();
     res.json(ticket);
   } catch (error) {

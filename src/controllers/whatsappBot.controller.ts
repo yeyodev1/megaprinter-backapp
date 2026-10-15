@@ -643,9 +643,10 @@ const CRM_URL = () => (process.env.BUILDERBOT_CRM_WEB || "https://62156346-df34-
 async function notifyHandoff(phone: string, result: TurnResult, message: string) {
   try {
     const list = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
-    // Marilexi atiende los chats; Selena y Johnny van en copia (pedido del cliente, oct-2026).
+    // Marilexi atiende los chats. Johnny pidio sacar su correo y el de Selena de las copias (15-oct-2026):
+    // solo van en copia si alguien los pone en HANDOFF_CC.
     const to = list(process.env.HANDOFF_EMAIL || "marilexich23@gmail.com");
-    const cc = list(process.env.HANDOFF_CC || "selenamendoza100@gmail.com,jhnnmurillo@gmail.com").filter((email) => !to.includes(email));
+    const cc = list(process.env.HANDOFF_CC || "").filter((email) => !to.includes(email));
     const session: any = await WhatsAppSessionModel.findOne({ phone }, { history: 1 }).lean();
     const history: any[] = session?.history || [];
     // El mensaje de este turno puede no estar guardado aun en el historial.

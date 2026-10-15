@@ -37,9 +37,21 @@ export const protectedPhrases = (text: string) => [
   ]),
 ];
 
+/** Saludo o presentacion al inicio ("Hola de nuevo!", "Qué gusto saludarte", "Soy *Mila*"). */
+const OPENS_WITH_GREETING = /^\W*(hola|holi|buen(os|as)|qu[eé] gusto|qu[eé] bueno (verte|saludarte|leerte)|soy \*?mila|te saluda)/i;
+
+/** La IA agrega datos que no estaban: "tu pedido MP-2024-0042", "equipo de ventas", precios o numeros nuevos. */
+const NEW_FACTS = /MP-|\$\d|\b(pedido|compra|ventas)\b/i;
+
 /** El borrador y la version de la IA conservan exactamente los mismos datos. */
 export function keepsData(draft: string, rewritten: string) {
   const output = rewritten.split("\n").map((line) => line.trim());
+  // ~100 respuestas de oct-15 abrian con "Hola de nuevo" o "Soy Mila" a mitad de la charla.
+  if (OPENS_WITH_GREETING.test(rewritten) && !OPENS_WITH_GREETING.test(draft)) return false;
+  const newFacts = (rewritten.match(new RegExp(NEW_FACTS, "gi")) || []).filter((token) => !draft.toLowerCase().includes(token.toLowerCase()));
+  if (newFacts.length) return false;
+  const newNumbers = (rewritten.match(/\d+/g) || []).filter((number) => !draft.includes(number));
+  if (newNumbers.length) return false;
   return (
     protectedLines(draft).every((line) => output.includes(line)) &&
     protectedTokens(draft).every((token) => rewritten.includes(token)) &&
@@ -51,7 +63,8 @@ export function keepsData(draft: string, rewritten: string) {
 export const BANNED = /ch[eé]vere|qu[eé] onda|\bchuta\b|no te cach[eé]/i;
 
 const VOICE_PROMPT = (name: string) => `Eres ${name}, el bot (agente virtual) de Megaprinter (tienda de tecnología en Ecuador) que atiende por WhatsApp. Mujer, súper amigable y cercana, tuteas, siempre con ganas de ayudar, nada formal, español de Ecuador, emojis.
-Te paso el BORRADOR del mensaje que vas a enviar y tus últimos mensajes. Reescribe el borrador para que suene natural y DISTINTO a tus mensajes anteriores (no repitas saludos, muletillas, aperturas ni emojis que ya usaste).
+Te paso el BORRADOR del mensaje que vas a enviar y tus últimos mensajes. Reescribe el borrador para que suene natural y DISTINTO a tus mensajes anteriores (no repitas muletillas, aperturas ni emojis que ya usaste).
+- La conversación ya está en curso: NO empieces con "Hola", "Hola de nuevo", "Qué gusto saludarte" ni te presentes ("Soy Mila") si el borrador no lo hace.
 Devuelve SOLO JSON: {"message":"..."}
 Reglas estrictas:
 - Copia IDÉNTICAS, cada una en su propia línea, las líneas de listas numeradas (*1.* …), viñetas (•), datos de cuenta (🏦, Cuenta, N.º, A nombre de, RUC), resumen (👤 📧 📍 💳), links y texto en cursiva (_…_).

@@ -36,14 +36,20 @@ const serviceTicketSchema = new Schema(
     },
     // Lo que define el equipo despues del diagnostico.
     finalPrice: { type: Number, default: null },
+    // Nombre visible de quien lo atiende (tickets viejos: texto libre) y el
+    // acceso del panel asignado, para el filtro "Mis tickets".
     assignedTo: { type: String, default: "" },
+    assignedToId: { type: Schema.Types.ObjectId, ref: "InternalUser", default: null },
     notes: [{ _id: false, text: String, by: String, at: { type: Date, default: Date.now } }],
     statusHistory: [{ _id: false, status: String, by: String, at: { type: Date, default: Date.now } }],
+    // Historial ligero de asignaciones: a quien ("" = se libero), quien y cuando.
+    assignHistory: [{ _id: false, to: String, by: String, at: { type: Date, default: Date.now } }],
   },
   { timestamps: true },
 );
 
 serviceTicketSchema.index({ status: 1, createdAt: -1 });
+serviceTicketSchema.index({ assignedToId: 1, createdAt: -1 });
 
 serviceTicketSchema.pre("validate", async function assignNumber() {
   if (this.isNew && !this.ticketNumber) {

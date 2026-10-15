@@ -43,7 +43,7 @@ export interface BotState {
   /** Pidio que no le escriban (queda registrado en la conversacion). */
   optOut: boolean;
   /** Solicitud de servicio tecnico o suministros en curso (la termina un asesor). */
-  ticket: { type: "servicio_tecnico" | "suministros" | ""; device: string; issue: string; stageBefore: Stage; nameTries?: number };
+  ticket: { type: "servicio_tecnico" | "suministros" | ""; device: string; issue: string; stageBefore: Stage; nameTries?: number; nameSkipped?: boolean; deviceTries?: number };
   /** Ultima lista numerada que se eligio: "3" al pedir el nombre puede ser "ver el catalogo" de esa lista. */
   lastOptions?: Array<{ productId: string; name: string; price: number }>;
   orderId: string;
@@ -347,7 +347,7 @@ function missingStage(state: BotState, deps: BotDeps): Stage {
 }
 
 const NOT_NAME_WORDS = new Set(
-  "esta este esa ese estos estas misma mismo mismas igual eso esto aqui ahi otra otro cual cuanto precio quiero necesito tengo tiene tienen busco para por favor gracias ok listo bueno dale resma papel tinta laptop impresora monitor camara asesor persona hola buenas".split(" "),
+  "esta este esa ese estos estas misma mismo mismas igual eso esto aqui ahi otra otro cual cuanto precio quiero necesito tengo tiene tienen busco para por favor gracias ok listo bueno dale resma papel tinta laptop impresora monitor camara asesor persona hola buenas voy camino direccion donde son venden porfa proforma marca ayudeme ayudame pilas lleve hubieran que como cuando local tienda fin semana manana hoy si no buena buen tardes dias noches".split(" "),
 );
 
 const looksLikeName = (text: string) => {
@@ -362,7 +362,15 @@ const looksLikeName = (text: string) => {
  * el nombre sin la frase de presentacion ni la empresa (chats reales oct-2026).
  */
 export function nameFrom(text: string): string {
-  const value = text.trim().replace(/[.,!]+$/, "");
+  // "Buen día Wilmer Barco.", "Q tal buen día soy Eduardo Arámbulo" (chats reales oct-15): sin el saludo.
+  const value = text
+    .trim()
+    .replace(/[.,!]+$/, "")
+    .replace(/^((hola+|ola+|q(ue)? tal|buen(os|as|a)?( (d[ií]as?|tardes?|noches?))?|buen d[ií]a|saludos)([\s,.!]+|$))+/i, "")
+    .trim();
+  // "Mi nombre es Alberto Bailón le preguntaba…", "Me confirma a qué hora estaría le saluda Jorge Vargas": el nombre en medio del texto.
+  const inside = value.match(/\b(?:soy|mi nombre es|me llamo|le saluda|les saluda|te saluda|le escribe)\s+(\p{Lu}[\p{L}']+(?:\s+\p{Lu}[\p{L}']+){0,3})/u);
+  if (inside && looksLikeName(inside[1])) return inside[1];
   const intro = value.match(/^(?:le |les |te )?(?:escribe|habla|saluda)\s+(.+)$|^(?:soy|me llamo|mi nombre es|a nombre de|de parte de)\s+(.+)$/i);
   if (!intro) return looksLikeName(value) ? value.replace(/\s+/g, " ") : "";
   // "... de Tecnycomp": la empresa al final (una sola palabra despues de "de").
@@ -470,6 +478,9 @@ function withPending(state: BotState, deps: BotDeps, text: string, decision: str
   state.stage = pending;
   return reply(state, `${text}\n\n${pending === "confirm" ? "Seguimos con tu pedido? 🛍️ Respóndeme *sí* para confirmarlo 💙" : questionFor(pending, deps)}`, decision);
 }
+
+const SERVICE_INFO =
+  "Claro! 🛠️ Reparamos y damos mantenimiento a laptops, computadoras, impresoras, monitores y cámaras. El *diagnóstico es sin costo* y el técnico te confirma el precio antes de reparar.";
 
 const FOLLOW_UP_REPLY =
   "Te paso con una persona del equipo para que revise tu caso 🙌 Ellos tienen el detalle de tu equipo o tu compra y en breve te escriben por aquí 💙";
@@ -605,23 +616,37 @@ const DEVICE_WORDS = new Set(DEVICES.flatMap((device) => device.words as readonl
 const ISSUE_WORDS = /\b(imprime|rayas?|atasca|enciende|prende|lenta|lento|calienta|pantalla|error|ruido|mancha|manchas|colores?|virus|bisagra|disco|bateria|ram|teclado|wifi|carga|apaga|reinicia|traba|cuelga|luces|parpadea|rodillo|cabezal|imagen|graba)\b/;
 const describesIssue = (text: string) => wantsService(text) || ISSUE_WORDS.test(normalize(text));
 
-/** Quedan al menos 2 palabras que no son saludo, relleno ni el nombre del equipo. */
-function describesProblem(message: string) {
+/** Cuenta una falla concreta (no "me interesa el servicio tecnico, más info"). */
+const ISSUE_DETAIL = /\b(no (imprime|enciende|prende|carga|funciona|detecta|reconoce|sale|vota|bota|da|jala|agarra|lee|arranca)|dan(o|ad[oa])|roto|rota|rajad[oa]|quebrad[oa]|falla|problemas?|virus|cambio de|cambiar|formate\w*|mantenimiento|limpieza|se apaga|se reinicia|se calienta|se traba|lent[oa]|ruido|rayas?|manchas?|corto|mojad[oa]|liquido|memoria|disco|solido|pantalla|bisagra|teclado|bateria|carcasa|pin de carga)\b/;
+
+/** Quedan al menos 2 palabras que no son saludo, relleno ni el nombre del equipo (sirve para suministros: "toner magenta Xerox 6515"). */
+function describesNeed(message: string) {
   return normalize(message).split(" ").filter((word) => word && !FILLER.has(word) && !DEVICE_WORDS.has(word)).length >= 2;
+}
+
+/** Servicio tecnico: ademas cuenta una falla concreta. */
+function describesProblem(message: string) {
+  const value = normalize(message);
+  return describesNeed(message) && (ISSUE_WORDS.test(value) || ISSUE_DETAIL.test(value));
 }
 
 function startTicket(state: BotState, type: "servicio_tecnico" | "suministros", message: string) {
   const device = type === "servicio_tecnico" ? detectDevice(message) : "";
   // Si el mensaje ya cuenta el problema ("mi impresora no imprime"), se usa como descripcion.
   // "necesito servicio tecnico para mi impresora" no cuenta ningun problema.
-  const issue = describesProblem(message) ? message.trim().slice(0, 500) : "";
+  const issue = (type === "suministros" ? describesNeed(message) : describesProblem(message)) ? message.trim().slice(0, 500) : "";
   state.ticket = { type, device, issue, stageBefore: isTicketStage(state.stage) ? state.ticket.stageBefore : state.stage };
 }
 
+/**
+ * Orden: equipo → problema → nombre. Antes el nombre iba primero y era un muro:
+ * 42 clientes del anuncio de servicio tecnico se fueron justo cuando se les pidio
+ * (chats reales 9-15 oct). Si no da el nombre en 2 intentos, se registra igual.
+ */
 function ticketMissing(state: BotState): Stage {
-  if (!state.customerName) return "ticket_name";
   if (state.ticket.type === "servicio_tecnico" && !state.ticket.device) return "ticket_device";
   if (!state.ticket.issue) return "ticket_issue";
+  if (!state.customerName && !state.ticket.nameSkipped) return "ticket_name";
   return "ticket_confirm";
 }
 
@@ -632,7 +657,7 @@ function ticketSummary(state: BotState, deps: BotDeps, catalog: BotProduct[]) {
       "",
       "🧾 *Suministros*",
       `📝 Necesitas: ${state.ticket.issue}`,
-      `👤 ${state.customerName}`,
+      ...(state.customerName ? [`👤 ${state.customerName}`] : []),
       "💲 Te cotizamos según la marca y el modelo",
       "",
       "La registro y te paso con un asesor? Respóndeme *sí* ✅",
@@ -645,7 +670,7 @@ function ticketSummary(state: BotState, deps: BotDeps, catalog: BotProduct[]) {
     "🧾 *Servicio técnico*",
     `${deviceEmoji(state.ticket.device)} Equipo: ${deviceLabel(state.ticket.device)}`,
     `📝 Problema: ${state.ticket.issue}`,
-    `👤 ${state.customerName}`,
+    ...(state.customerName ? [`👤 ${state.customerName}`] : []),
     `💲 Precio referencial: ${priceText(estimate)} (${estimate.label.toLowerCase()})`,
     "_El diagnóstico es sin costo y el técnico te confirma el precio._",
     "",
@@ -656,7 +681,7 @@ function ticketSummary(state: BotState, deps: BotDeps, catalog: BotProduct[]) {
 async function askTicketNext(state: BotState, deps: BotDeps, decision: string, prefix = ""): Promise<TurnResult> {
   state.stage = ticketMissing(state);
   const join = (text: string) => (prefix ? `${prefix}\n\n${text}` : text);
-  if (state.stage === "ticket_name") return reply(state, join("Para registrar tu solicitud, a nombre de quién la pongo? 😊 Pásame tu nombre y apellido"), decision);
+  if (state.stage === "ticket_name") return reply(state, join("Ya casi 🙌 A nombre de quién la registro? Pásame tu nombre y apellido 😊"), decision);
   if (state.stage === "ticket_device") {
     const list = DEVICES.map((device, index) => `*${index + 1}.* ${device.emoji} ${device.label}`).join("\n");
     return reply(state, join(`Con qué equipo te ayudamos? 🛠️\n${list}`), decision);
@@ -687,7 +712,9 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
     state.stage = state.ticket.stageBefore === "ordered" ? "idle" : state.ticket.stageBefore || "idle";
     state.ticket = createInitialState().ticket;
   };
-  if (isShortNo(text) || /\b(cambio de tema|solo (es )?una consulta|ya no|eso no|de eso no|no gracias|no por ahora)\b/.test(normalize(text))) {
+  // "No prende", "No vota imagen" es el problema, no un "no" (chats reales oct-15: cancelaba el ticket).
+  const saysNo = state.stage !== "ticket_issue" && !describesIssue(text) && !ISSUE_DETAIL.test(normalize(text)) && isShortNo(text);
+  if (saysNo || /\b(cambio de tema|solo (es )?una consulta|ya no|eso no|de eso no|no gracias|no por ahora)\b/.test(normalize(text))) {
     leaveTicket();
     return reply(state, "Listo, no la registro 👍 Si después necesitas el servicio, aquí estoy. Te ayudo con algo más? 😊", "R10:ticket_cancelado");
   }
@@ -703,20 +730,31 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
   if (state.stage === "ticket_name") {
     const name = nameFrom(text);
     if (!name) {
-      // Dos respuestas sin nombre ("RUC 099…", "ya me están atendiendo en el otro número"):
-      // no se insiste mas, pasa a una persona (en produccion el bot repetia la pregunta sin fin).
-      state.ticket.nameTries = (state.ticket.nameTries || 0) + 1;
-      if (state.ticket.nameTries >= 2 || /\b(ya me (estan|esta) atendiendo|otro numero)\b/.test(normalize(text))) {
+      if (/\b(ya me (estan|esta) atendiendo|otro numero)\b/.test(normalize(text))) {
         leaveTicket();
         return toHuman(state, "Te paso con una persona del equipo para que te ayude directamente 🙌 En breve te escribe por aquí 💙", "R10:ticket_a_asesor");
       }
-      return reply(state, isYes(text) ? "Perfecto 😊 Para registrarla, me pasas tu nombre y apellido?" : "Me pasas tu nombre y apellido? 😊 (por ejemplo: Ana Pérez)", "R10:ticket_nombre_invalido");
+      // Cuenta algo mas del problema en vez del nombre: se anota.
+      if (describesIssue(text) || ISSUE_DETAIL.test(normalize(text))) state.ticket.issue = `${state.ticket.issue}. ${text}`.slice(0, 500);
+      // Sin nombre al segundo intento se registra igual (el asesor ve el telefono): nada de preguntar en bucle.
+      state.ticket.nameTries = (state.ticket.nameTries || 0) + 1;
+      if (state.ticket.nameTries >= 2) {
+        state.ticket.nameSkipped = true;
+        return askTicketNext(state, deps, "R10:ticket_sin_nombre");
+      }
+      return reply(state, isYes(text) ? "Perfecto 😊 Para registrarla, me pasas tu nombre y apellido?" : "Anotado 📝 Y a nombre de quién la registro? Solo tu nombre y apellido 😊", "R10:ticket_nombre_invalido");
     }
     state.customerName = name;
     return askTicketNext(state, deps, "R10:ticket_nombre");
   }
   if (state.stage === "ticket_device") {
     const choice = extractChoice(text, DEVICES.length);
+    // "Para fin de semana", "?", "Mmm, entiendo": no es un equipo; se pregunta una vez mas (chats reales oct-15).
+    if (!choice && !detectDevice(text) && !(state.ticket.deviceTries || 0)) {
+      state.ticket.deviceTries = 1;
+      if (describesIssue(text) || ISSUE_DETAIL.test(normalize(text))) state.ticket.issue = text.slice(0, 500);
+      return askTicketNext(state, deps, "R10:ticket_equipo_no_entendido", "Para anotarlo bien 🙌");
+    }
     state.ticket.device = choice ? DEVICES[choice - 1].key : detectDevice(text) || text.slice(0, 60);
     if (!state.ticket.issue && detectDevice(text) && describesProblem(text)) state.ticket.issue = text.slice(0, 500);
     return askTicketNext(state, deps, "R10:ticket_equipo");
@@ -736,7 +774,7 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
       const estimate = state.ticket.type === "servicio_tecnico" ? estimateService(state.ticket.device, state.ticket.issue, catalog) : null;
       const { ticketNumber } = await deps.createTicket({
         type: state.ticket.type as "servicio_tecnico" | "suministros",
-        customerName: state.customerName,
+        customerName: state.customerName || "Cliente de WhatsApp",
         device: state.ticket.device,
         issue: state.ticket.issue,
         estimate,
@@ -781,6 +819,11 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
         "R1:comprobante",
         { intent: "comprobante_recibido", route: "receiptReceived", orderNumber: outcome.orderNumber, paymentMethod: "transfer", total: outcome.total },
       );
+    }
+    // Foto de SU equipo en medio de una solicitud de servicio (pantalla rota, error): no es para comprar
+    // (chats reales oct-15: "laptop HP con la pantalla dañada… Cuál te agrego al carrito?").
+    if (outcome.status === "image" && isTicketStage(state.stage)) {
+      return askTicketNext(state, deps, "R1:foto_del_ticket", "Recibí tu foto 📎 El técnico la revisa junto con tu solicitud.");
     }
     if (outcome.status === "image" && outcome.kind === "product") {
       const catalog = await deps.loadCatalog();
@@ -852,6 +895,10 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   }
 
   // Transparencia: si pregunta si es un bot o una persona, se le dice la verdad.
+  // "Eres IA podría por favor atenderme una persona?": pregunta Y pide persona (chat real oct-15).
+  if (asksIfBot(message) && /\b(atender(me)?|atienda|quiero hablar|necesito hablar|prefiero (hablar|una persona)|pasame|paseme|comunicar(me)?)\b/.test(normalize(message))) {
+    return toHuman(state, `Sí, soy un bot 🤖 Ya te paso con una persona del equipo de *Megaprinter* 🙌 En breve te escribe por aquí 💙`, "R2:humano");
+  }
   if (asksIfBot(message)) {
     return reply(
       state,
@@ -871,6 +918,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   const menuChoice = (menuShown || bareNumber) && !state.options.length ? extractChoice(message, MENU.length) : null;
   if (menuChoice) {
     const item = MENU[menuChoice - 1];
+    if (item.key !== "asesor") state.handoffAt = "";
     if (item.key === "asesor") {
       return toHuman(state, "De una! Te paso con una persona del equipo de Megaprinter 🙌 En breve te escribe por aquí 💙", "R2:menu_asesor");
     }
@@ -890,10 +938,23 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     return reply(state, `Ahora mismo no tengo ${item.label.replace(/^\S+\s/, "").toLowerCase()} en el catálogo 🙈 Escribe *asesor* y una persona te ayuda.`, "R5:menu_vacio");
   }
   if (/^(menu|menú|opciones|inicio|volver)$/i.test(message.replace(/[.!?]/g, "").trim())) {
+    state.handoffAt = ""; // "menú" saca el chat del traspaso: vuelve a responder el bot.
     return reply(state, ASK_PRODUCT, "R9:menu");
   }
   const inHandoff = within(state.handoffAt, HANDOFF_MS);
   const midCheckout = state.cart.length > 0 && ["name", "email", "address", "payment", "bank", "confirm"].includes(state.stage);
+
+  // Ya se paso a una persona hace menos de 1 h: el bot no se mete en la charla con el asesor
+  // (chats reales oct-15: 34 chats donde Mila respondia lo que el cliente le decia a la asesora,
+  // abria tickets o guardaba "Srta. Si acepta transferencia" como equipo). Solo "menú" vuelve al bot.
+  if (inHandoff && !wantsTracking(message)) {
+    state.options = [];
+    if (isTicketStage(state.stage)) state.stage = "idle";
+    return reply(state, "Ya le avisé al equipo 🙌 En breve una persona te escribe por aquí 💙 Si mientras tanto quieres seguir conmigo, escríbeme *menú*.", "R2:esperando_asesor", {
+      intent: "dudas",
+      route: "human",
+    });
+  }
 
   // R2: pedir una persona, o "sí" cuando el bot ofrecio un asesor.
   if (wantsHuman(message) || (offeredHuman && isYes(message))) {
@@ -916,15 +977,11 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     return toHuman(state, FOLLOW_UP_REPLY, "R2:seguimiento_caso");
   }
   if (!midCheckout && coordinatesVisit(message)) {
-    return toHuman(state, "Perfecto! 🙌 Te paso con una persona del equipo para coordinar contigo. En breve te escribe por aquí 💙", "R2:coordinar_visita");
+    return toHuman(state, "Perfecto! 🙌 Le aviso al equipo para que te atienda y coordine contigo. En breve te escriben por aquí 💙", "R2:coordinar_visita");
   }
   // "me quedo con la opcion 1" sin opciones en este chat: se las dio un asesor.
   if (refersToOption(message) && !state.options.length) {
     return toHuman(state, "Te paso con la persona del equipo que te mostró esas opciones para cerrar tu compra 🙌 En breve te escribe por aquí 💙", "R2:opcion_de_asesor");
-  }
-  // Ya se paso a un asesor hace poco: "ok", "sí", "gracias" no reinician la charla.
-  if (inHandoff && (isAck(message) || isGreeting(message))) {
-    return reply(state, "Ya le avisé al equipo 🙌 En breve una persona te escribe por aquí 💙", "R2:esperando_asesor");
   }
 
   // Saludo con la lista a la vista ("Buen día") y relleno ("ok", "bueno", "Mmm, entiendo"):
@@ -966,7 +1023,9 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   const serviceAsked = wantsService(message) && !claimsPaid(message) && !aboutPayment;
   // "impresora de tinta continua" es un producto; "tinta para mi Epson" o "toner" son suministros.
   const explicitSupplies = /\b(suministros?|toner|cartuchos?|botellas?|repuestos?|consumibles?)\b/.test(normalized) || PARTS.test(normalized);
-  const suppliesAsked = !serviceAsked && wantsSupplies(message) && state.stage !== "choosing" && (explicitSupplies || !/\b(impresoras?|multifuncion|laptop|monitor|camara)\b/.test(normalized));
+  // Con una lista a la vista, un pedido nuevo de varias palabras ("El juego de tintas de la impresora Epson") tambien cuenta (oct-15).
+  const newRequest = state.stage !== "choosing" || (normalized.split(" ").length >= 3 && !extractChoice(message, state.options.length + 1));
+  const suppliesAsked = !serviceAsked && wantsSupplies(message) && newRequest && (explicitSupplies || !/\b(impresoras?|multifuncion|laptop|monitor|camara)\b/.test(normalized));
   if (suppliesAsked && asksInk(normalized)) {
     const inks = await offerInks(state, deps, message, "R10:tintas");
     if (inks) return inks;
@@ -976,13 +1035,20 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     const quote = /\b(cotiza\w*|ninguna|ninguno|no esta|no es esa|otra tinta|otro modelo)\b/.test(normalized);
     if (quote || (wantsSupplies(message) && !asksInk(normalized))) {
       state.options = [];
-      if (describesProblem(message) && !/^(cotizar|cotizala|cotizamela|ninguna|ninguno)$/.test(normalized)) state.ticket.issue = message.trim().slice(0, 500);
+      if (describesNeed(message) && !/^(cotizar|cotizala|cotizamela|ninguna|ninguno)$/.test(normalized)) state.ticket.issue = message.trim().slice(0, 500);
       return askTicketNext(state, deps, "R10:tintas_cotizar", "Dale! Te lo cotizamos 📝");
     }
   }
   if (serviceAsked || suppliesAsked) {
     startTicket(state, serviceAsked ? "servicio_tecnico" : "suministros", message);
-    const intro = serviceAsked ? "Claro! Te ayudo con el servicio técnico 🛠️" : "Claro! Te ayudo con los suministros 🧴";
+    state.options = [];
+    // "vi su anuncio y me interesa el servicio técnico, más info?" (108 mensajes del anuncio, oct-2026).
+    const wantsInfo = /\b(info|informacion|anuncio|publicacion|me interesa|detalles)\b/.test(normalized);
+    const intro = serviceAsked
+      ? wantsInfo
+        ? SERVICE_INFO
+        : "Claro! Te ayudo con el servicio técnico 🛠️"
+      : "Claro! Te ayudo con los suministros 🧴";
     return askTicketNext(state, deps, serviceAsked ? "R10:servicio_tecnico" : "R10:suministros", intro);
   }
 
@@ -1090,8 +1156,20 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
 
   // Solo un saludo ("estimada buenas tardes", "Ola buenas tarde"): se saluda sin pasar por la IA
   // (en produccion la IA a veces lo tomaba como algo que no entendia).
-  const onlyGreeting = isGreeting(message) && !normalize(message).replace(/\b(hola+|ola+|estimad[oa]s?|senor(a|ita)?|amig[oa]s?|muy|que|tal|buen(os|as)?|dias?|tardes?|noches?|saludos|hey|bendiciones|como|esta|estas|le|va)\b/g, "").replace(/[^a-z0-9]/g, "");
+  const onlyGreeting = isGreeting(message) && !normalize(message).replace(/\b(hola+|ola+|estimad[oa]s?|senor(a|ita)?|amig[oa]s?|muy|que|tal|buen(os|as|a)?|dias?|tardes?|noches?|saludos|hey|bendiciones|como|esta|estas|le|va)\b/g, "").replace(/[^a-z0-9]/g, "");
   if (onlyGreeting && state.stage === "idle" && !state.cart.length) return greet(state);
+  // Llega de un anuncio sin decir que busca ("Vi la publicación en Facebook", "Vengo de TikTok"): bienvenida con el menu.
+  if (state.stage === "idle" && !state.cart.length && /\b(vi (su|la|el|tu) (anuncio|publicacion|video|post)|vengo de|los vi en|por (facebook|tiktok|instagram)|(en|de) (facebook|tiktok|instagram|face|fb|ig))\b/.test(normalize(message)) && !wantsService(message) && !wantsSupplies(message) && normalize(message).split(" ").length <= 8) {
+    return reply(state, `Hola, qué bueno que nos escribes! 🙌 Te saluda *${botName()}* 🤖, el chatbot de *Megaprinter*.\n\n${ASK_PRODUCT}`, "R9:saludo_anuncio");
+  }
+  // Solo su nombre ("Soy jaime giler", "Shirley Jiménez"): se guarda y se le pregunta qué busca.
+  if (state.stage === "idle" && !state.cart.length && normalize(message).split(" ").length <= 5) {
+    const name = /^(soy|me llamo|mi nombre es)\b/i.test(message) || (/^\p{Lu}/u.test(message) && message.trim().split(/\s+/).length >= 2) ? nameFrom(message) : "";
+    if (name && !searchProducts(catalog, message).length) {
+      state.customerName = name;
+      return reply(state, `Mucho gusto, ${name.split(" ")[0]} 😊\n\n${ASK_PRODUCT}`, "R9:nombre");
+    }
+  }
 
   // Desde aqui se necesita entender el mensaje.
   const extraction = await deps.extract(message, {
@@ -1258,7 +1336,7 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   }
 
   // Politica de Meta (2026): nada de asistente de proposito general. Solo Megaprinter.
-  if (extraction.intent === "fuera_de_tema") {
+  if (extraction.intent === "fuera_de_tema" && !/^\d{1,3}$/.test(message.trim())) {
     return reply(
       state,
       resume(`Uy, eso se me escapa 🙈 Pero en todo lo de *Megaprinter* cuenta conmigo siempre: equipos, impresoras, cámaras, servicio técnico y tus pedidos 💻🖨️✨`),
@@ -1299,6 +1377,14 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
 
   // R9: saludo o algo que no se entendio: se retoma el paso pendiente.
   if (isGreeting(message) && !state.cart.length) return greet(state);
+  if (state.stage === "choosing" && normalize(message).split(" ").length >= 4) {
+    // Ya no habla de la lista: se suelta y se ofrece una persona en vez de pedir un numero.
+    state.options = [];
+    state.stage = state.cart.length ? missingStage(state, deps) : "idle";
+    const result = reply(state, `Quiero ayudarte bien con esto 🙌 Te paso con una persona del equipo? Respóndeme *sí*, o elige una opción:\n\n${MENU_LIST}`, "R9:no_entendido_ofrece_asesor");
+    state.offeredHuman = true;
+    return result;
+  }
   if (state.stage === "choosing") {
     return reply(state, "Para elegir, respóndeme con el *número* de la opción 😊 Si buscas otra cosa, cuéntamelo con otras palabras, o escribe *asesor* y te atiende una persona 🙋", "R9:eleccion_no_entendida");
   }
@@ -1306,7 +1392,10 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
   if (!state.cart.length) {
     // Un mensaje largo que no se entendio suele ser un caso real: se ofrece una persona (un "sí" la acepta).
     if (normalize(message).split(" ").length >= 7) {
-      return reply(state, `Quiero ayudarte bien con esto 🙌 Te paso con una persona del equipo? Respóndeme *sí*, o elige una opción:\n\n${MENU_LIST}`, "R9:no_entendido_ofrece_asesor");
+      const result = reply(state, `Quiero ayudarte bien con esto 🙌 Te paso con una persona del equipo? Respóndeme *sí*, o elige una opción:\n\n${MENU_LIST}`, "R9:no_entendido_ofrece_asesor");
+      // El texto termina con el menu (no en "?"): el "sí" siguiente igual acepta al asesor (3 chats reales oct-15).
+      state.offeredHuman = true;
+      return result;
     }
     return reply(state, `Uy, no te entendí bien 🙈 ${ASK_PRODUCT}`, "R9:no_entendido");
   }
@@ -1343,6 +1432,8 @@ export function decideRoute(
   if (input.mediaUrl || (input.mediaEvent && !message)) return { route: "checkoutTransfer", reason: "archivo adjunto" };
   if (!message) return { route: "conversation", reason: "mensaje vacio" };
   // "hablo con una persona?" es una pregunta (se responde que es un bot), no un pedido de asesor.
+  // Pero "eres IA? podría atenderme una persona?" si lo es.
+  if (asksIfBot(message) && /\b(atender(me)?|atienda|quiero hablar|necesito hablar|prefiero (hablar|una persona)|pasame|paseme|comunicar(me)?)\b/.test(normalize(message))) return { route: "human", reason: "pregunta si es un bot y pide persona" };
   if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
   // Menu principal: 8 = asesor, 7 = catalogo.
@@ -1351,8 +1442,13 @@ export function decideRoute(
   if (menuChoice && MENU[menuChoice - 1].key === "catalogo") return { route: "catalog", reason: "menu: catalogo" };
   if (menuChoice) return { route: "conversation", reason: `menu: ${MENU[menuChoice - 1].key}` };
   if (state.offeredHuman && isYes(message)) return { route: "human", reason: "acepta el asesor que ofrecio el bot" };
+  if (/^(menu|menú|opciones|inicio|volver)$/i.test(message.replace(/[.!?]/g, "").trim())) return { route: "catalog", reason: "pide el menu" };
+  // En traspaso (menos de 1 h desde que paso a una persona): al flujo de asesor, que silencia al bot.
+  // Antes muchos traspasos salian del flujo Conversacion (sin paso Silenciar) y Mila seguia hablando.
+  if (within(state.handoffAt, HANDOFF_MS) && !wantsTracking(message)) return { route: "human", reason: "en traspaso con una persona" };
   const midCheckout = state.cart.length > 0 && ["name", "email", "address", "payment", "bank", "confirm"].includes(state.stage);
   if (!midCheckout && followsUpCase(message)) return { route: "human", reason: "sigue un caso con el equipo" };
+  if (!midCheckout && coordinatesVisit(message)) return { route: "human", reason: "va a la tienda" };
   if (refersToOption(message) && !state.options.length) return { route: "human", reason: "opcion que dio un asesor" };
   if (wantsCash(message) && state.cart.length && ["payment", "bank", "confirm", "address"].includes(state.stage)) return { route: "human", reason: "quiere pagar en efectivo" };
   if (wantsTracking(message) || orderNumberIn(message)) return { route: "conversation", reason: "consulta de pedido" };

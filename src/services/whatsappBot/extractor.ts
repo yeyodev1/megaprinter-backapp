@@ -91,9 +91,9 @@ intent (uno):
 - "humano": pide un asesor, reclama, garantía o algo que el bot no puede resolver.
 - "dato": solo responde un dato que el bot pidió (nombre, correo, dirección, forma de pago, sí/no).
 - "saludo": solo saluda.
-- "fuera_de_tema": pide algo que NO es de Megaprinter (tareas, recetas, chistes, política, programación, traducciones, consejos generales, escribir textos, otras tiendas). Política de Meta: este bot SOLO atiende ventas y soporte de Megaprinter; nunca respondas eso. Repuestos, accesorios, papel, resmas, tintas, drivers, instalación de un equipo, números sueltos o códigos NO son fuera_de_tema.
+- "fuera_de_tema": pide algo que NO es de Megaprinter (tareas, recetas, chistes, política, programación, traducciones, consejos generales, escribir textos, otras tiendas). Política de Meta: este bot SOLO atiende ventas y soporte de Megaprinter; nunca respondas eso. Repuestos, accesorios (carcasas, teclados, pantallas, baterías, parlantes, memorias, discos), papel, resmas, tintas, drivers, instalación de un equipo, horarios ("cierran a las 6?"), ciudades, números sueltos o códigos NO son fuera_de_tema. Si es un mensaje corto que no se entiende, usa "otro", no fuera_de_tema.
 - "servicio_tecnico": un equipo suyo falla o necesita reparación, mantenimiento, revisión, instalación o drivers.
-- "suministros": pide tintas, tóner, cartuchos, papel (resmas, A4, fotográfico, de sublimación), repuestos o accesorios que no son un equipo del catálogo. USA EL HISTORIAL: si antes pidió una resma y ahora escribe "A4" o "de sublimación", sigue siendo suministros. En searchQuery pon TODO lo que pide junto, con lo del historial ("resma de papel de sublimación A4").
+- "suministros": pide tintas, tóner, cartuchos, papel (resmas, A4, fotográfico, de sublimación), repuestos o accesorios que no son un equipo del catálogo (carcasa, teclado, pantalla, batería, cargador, memoria RAM, disco sólido). USA EL HISTORIAL: si antes pidió una resma y ahora escribe "A4" o "de sublimación", sigue siendo suministros. En searchQuery pon TODO lo que pide junto, con lo del historial ("resma de papel de sublimación A4").
 - "cuenta_bancaria": quiere los datos de una cuenta para transferir o depositar ("Cuenta Pichincha", "a qué cuenta deposito").
 - "otro": nada de lo anterior.
 Lee siempre el historial reciente: un mensaje corto ("A4", "esa misma", "la negra", "8") casi siempre completa lo que se venía hablando.
@@ -108,6 +108,8 @@ Campos:
 - paymentMethod: "card" (tarjeta, link de pago, Payphone) o "transfer" (transferencia, depósito). null si no lo dice.
 - answer: SOLO con intent "pregunta". Hablas como Mila, el bot de Megaprinter (nunca digas que eres una persona): voz femenina, cercana, siempre amigable y con ganas de ayudar, nada formal, tuteas, usas 2 o 3 emojis. Nunca digas "qué chévere", "qué onda" ni "chuta". Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡"). Máximo 2 frases (un párrafo, sin listas ni viñetas), español de Ecuador. Puedes usar *negrita* de WhatsApp (asterisco al inicio y al final de la palabra). Basado EXCLUSIVAMENTE en el catálogo. Si devuelves suggestions, NO enumeres esos productos en answer: el sistema los muestra numerados debajo; solo explica el criterio (ej. "Para diseño te conviene un Core i7 o Ryzen 7 con 16 GB de RAM; estas son las mejores opciones:"). Si mencionas un precio, exacto del catálogo en formato $1234.56. Si el dato no está en el catálogo, dilo y ofrece pasar con un asesor. No pidas datos personales en answer.
   · Datos de la tienda (úsalos tal cual, NUNCA inventes otras sucursales, ciudades ni redes): ${storeFactsForPrompt()}
+  · Nunca afirmes specs, compatibilidades ni ampliaciones (RAM, disco) que no estén escritas en el catálogo, ni digas que algo "no se vende suelto": eso lo confirma un asesor. Si dices "estas son las opciones" o "te muestro", DEBES llenar suggestions; si no hay productos que mostrar, no lo digas.
+  · No hables de pedidos, compras ni números de pedido si el cliente no los mencionó.
   · NO inventes políticas: IVA, costo o tiempo de envío, garantía, diferidos, tiempos de reparación y stock de lo que no está en el catálogo los confirma un asesor. Sí se hacen envíos a otras ciudades de Ecuador (el costo lo confirma el equipo).
   · Si algo no está en el catálogo (repuestos, cargadores, cabezales, parlantes, otro modelo), di que no lo tienes en el catálogo y que un asesor puede cotizarlo. Nunca digas "solo vendemos X": vendemos laptops, all in one, monitores, impresoras, cámaras, tintas y suministros, y hacemos servicio técnico.
 - Usa la pregunta anterior del bot y el historial para interpretar respuestas cortas ("la segunda", "esa", "sí").
@@ -153,6 +155,8 @@ export const aiExtract: Extractor = async (message, context) => {
   const parsed = await geminiJson<any>({
     system: `${PROMPT}\n\nCATÁLOGO:\n${catalogForPrompt(context.catalog)}`,
     text: [
+      // Sin la fecha la IA decia "hoy domingo" un sabado (chats reales 9 y 10 oct).
+      `Hoy es: ${new Intl.DateTimeFormat("es-EC", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "America/Guayaquil" }).format(new Date())} (hora de Ecuador)`,
       `Paso actual del bot: ${context.stage}`,
       `Pregunta anterior del bot: ${context.lastQuestion || "(ninguna)"}`,
       `Carrito: ${context.cart.map((line) => `${line.quantity} x ${line.name}`).join(", ") || "(vacío)"}`,

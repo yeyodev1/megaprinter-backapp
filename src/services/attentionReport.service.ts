@@ -165,7 +165,8 @@ ${handoffRows ? `<table style="width:100%;border-collapse:collapse;font-size:14p
 ${notUnderstoodRows ? `<h3>🤔 Lo que Mila no entendió</h3><ul>${notUnderstoodRows}</ul>` : ""}
 <p><a href="${web}/admin/atencion?date=${date}">Ver el reporte completo en el panel</a></p></div>`;
   const list = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
-  const to = list(process.env.REPORT_EMAIL || "marilexich23@gmail.com,selenamendoza100@gmail.com,jhnnmurillo@gmail.com");
+  // Johnny pidio desvincular su correo y el de Selena (15-oct-2026): por defecto solo Marilexi.
+  const to = list(process.env.REPORT_EMAIL || "marilexich23@gmail.com");
   const result = await sendEmail(to, `📊 Atención WhatsApp ${date}: ${t.conversations} personas, ${t.handoffs} pidieron asesor, ${t.unattended} sin atender`, html, undefined, storeRecipients().filter((email) => !to.includes(email)));
   return { report, email: result };
 }

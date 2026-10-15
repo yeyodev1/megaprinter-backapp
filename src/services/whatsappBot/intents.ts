@@ -16,7 +16,7 @@ export const isNo = (text: string) => has(text, /^(no+|nop|nel|todavia no|aun no
 export const isShortNo = (text: string) => isNo(text) && normalize(text).split(" ").length <= 3;
 
 export const wantsHuman = (text: string) =>
-  has(text, /\b(asesor|humano|persona|agente|alguien real|hablar con alguien|vendedor|reclamo|queja|estafa|devolucion|garantia)\b/) ||
+  has(text, /\b(a[sc]esor(a|es)?|humano|persona|agente|alguien real|hablar con alguien|vendedor|reclamo|queja|estafa|devolucion|garantia)\b/) ||
   // Chats reales (oct-2026): "puedo hablar no con un bot jeje", "Me puede atender".
   has(text, /\b(no (con )?(un |el )?bot|no quiero (hablar con )?(un |el )?bot|me (puede|pueden|podria|podrian) atender|atiendame|atenderme)\b/);
 
@@ -30,7 +30,8 @@ export const wantsCancel = (text: string) =>
   has(text, /\b(cancela(r)?|ya no (lo )?quiero|olvidalo|vaciar( el)? carrito|borra(r)? (todo|el carrito))\b/);
 
 // Chats reales (oct-2026): "estimada buenas tardes", "Ola buenas tarde", "hola amiga como esta", "Bendiciones", "👋👋".
-const GREETING = /^((hola+|ola+|estimad[oa]s?|senor(a|ita)?|amig[oa]|muy|que tal)\s+)*(hola+|ola+|buen(os|as)?( (dias?|tardes?|noches?))?|buen dia|saludos|hey|que tal|bendiciones|como (esta|estas|le va))\b/;
+// Oct-15: "Buena tardes" tambien es saludo.
+const GREETING = /^((hola+|ola+|estimad[oa]s?|senor(a|ita)?|amig[oa]|muy|que tal)\s+)*(hola+|ola+|buen(os|as|a)?( (dias?|tardes?|noches?))?|buen dia|saludos|hey|que tal|bendiciones|como (esta|estas|le va))\b/;
 export const isGreeting = (text: string) =>
   (has(text, GREETING) && normalize(text).split(" ").length <= 6) || /^[\s👋🙋🙌🤝😊🙂.!?‍♀♂️]+$/u.test(text.trim()) && /[👋🙋]/u.test(text);
 
@@ -82,7 +83,7 @@ export const claimsPaid = (text: string) =>
 /** Quiere servicio tecnico: reparar, mantenimiento, formateo, algo que falla. */
 export const wantsService = (text: string) =>
   !has(text, MAINTENANCE_PART) &&
-  (has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico|tiene problemas?|no detecta|no sale(n)? (todos )?(los )?colores)\b/) ||
+  (has(text, /\b(servicio tecnico|soporte tecnico|tecnico|reparar|reparacion|arreglar|mantenimiento|formatear|formateo|se (me )?dano|esta danad[ao]|no imprime|no enciende|no prende|no carga|no funciona|falla|revisen|revisar mi|diagnostico|tiene problemas?|no detecta|(pantalla|bisagra|carcasa|teclado|pin de carga) (esta |se )?(rot[oa]|quebrad[oa]|rajad[oa]|dan(ad[oa])?)|se (me )?(rompio|quebro|mojo)|no sale(n)? (todos )?(los )?colores)\b/) ||
   // "ha tenido problemas para imprimir los colores y salen distorsionados" (chat real).
   has(text, /\b((ha|han|habia) tenido problemas?|tuvo problemas?|(esta|estan) dando problemas?|da problemas?|salen? (distorsionad|borros|manchad|rayad|corrid|en blanco)\w*|imprime (mal|borroso|corrido|manchado))\b/));
 
@@ -98,12 +99,19 @@ export const PARTS = /\b(repuestos?|cargador(es)?|adaptador(es)?|cabezal(es)?|en
 
 /** Donde queda la tienda / horarios. "direccion" sola tambien (fuera del paso de direccion). */
 export const asksStoreInfo = (text: string) =>
+  // "RUC … Dirección: La joya …": son sus datos de factura, no pregunta por la tienda.
+  !/@|\bruc\b/i.test(text) &&
+  (  // "me pasa la dirección", "Dirección para ir", "Direcion" (chats reales oct-15): la direccion en cualquier parte.
+  has(text, /\bdirec+(c|s)?i?on\b/) ||
   has(text, /\b(ubicacion|ubicaciones|ubican|ubicados|donde (estan|quedan|queda|se encuentran|los encuentro)|direccion (de la tienda|del local|de su local|de sus locales|de ustedes)|su local|sus locales|sucursal(es)?|horarios?|a que hora (abren|cierran|atienden)|abren|cierran|atienden (los )?(sabados|domingos|hoy))\b/) ||
-  has(text, /^(la )?direccion\??$/);
+  has(text, /^(la )?direccion\??$/));
 
 /** Va a ir a la tienda o ya le mando datos a una persona: "ya seria para ir en 1 hora a realizar la compra", "envie direccion". */
 export const coordinatesVisit = (text: string) =>
-  has(text, /\b((para|voy a|vamos a|puedo|podemos) ir (a|al|en|hoy|manana|ahorita)|ir en \d+|envie (la |mi )?(direccion|ubicacion))\b/);
+  has(text, /\b((para|voy a|vamos a|puedo|podemos) ir (a|al|en|hoy|manana|ahorita)|ir en \d+|envie (la |mi )?(direccion|ubicacion))\b/) ||
+  // Va llegando a la tienda (chats reales oct-14/15): "Llegando", "En la esquina", "Ya mismo paso por ahí", "Ya m acerco al local".
+  has(text, /^(ya )?(llegando|llegue|estoy (llegando|afuera|aqui afuera|en la puerta|en la esquina)|en la esquina|voy en camino|en camino|ya voy|voy para alla|ya estoy (aqui|afuera|ahi|por ahi|en el local))\b/) ||
+  has(text, /\b(ya mismo (paso|voy|llego)|ya (me )?(m )?acerco|me acerco (al|a su) local|paso por (ahi|alla|el local)|voy saliendo|ya salgo para alla)\b/);
 
 /** Horario sin mas (para responder solo eso). */
 export const asksOnlyHours = (text: string) => has(text, /\b(horarios?|a que hora|abren|cierran)\b/) && !has(text, /\b(ubica|donde|direccion|local|sucursal)/);
@@ -121,7 +129,7 @@ export const followsUpCase = (text: string) =>
   // "el dia lunes compre una impresora canon", "Orden 1241" (chats reales oct-2026).
   has(
     text,
-    /\b(novedad(es)?|no me (dan|dieron|han dado) (respuesta|razon)|(lleve|llevamos|deje|dejamos) (mi|la|el|una|un|nuestra) (impresora|laptop|maquina|equipo|computadora|pc|monitor|camara)|orden (n[or]?\.? ?)?\d{3,}|(mi|la) orden de)\b/,
+    /\b(novedad(es)?|no me (dan|dieron|han dado) (respuesta|razon)|retir(ar|o|aria|ando|are)\b.{0,25}\b(laptop|computadora|cpu|pc|impresora|equipo|maquina|monitor)|(estado|status)\b.{0,15}\b(mi|de mi|de la|del|de esta)\b.{0,15}\b(laptop|computadora|equipo|impresora|maquina|pc)|ya (se )?pudo arreglar|ya (la|lo) (arreglaron|repararon|revisaron)|ya tienen? el diagnostico|(llevo|lleve|traje|deje) (la|mi|el) (laptop|computadora|equipo|impresora|maquina|pc)|llego el (teclado|repuesto|cargador|pantalla)|quedaron en (avisar|llamar)|quedo en (avisar|llamar)|equipo ingresado|transferencia (realizada|que (hice|realice))|datos para la factura|(lleve|llevamos|deje|dejamos) (mi|la|el|una|un|nuestra) (impresora|laptop|maquina|equipo|computadora|pc|monitor|camara)|orden (n[or]?\.? ?)?\d{3,}|(mi|la) orden de)\b/,
   ) ||
   // Compra pasada sin contar una falla ("el dia lunes compre una impresora canon"); si cuenta la falla es servicio tecnico.
   (has(text, /\b(le |la |lo )?(compre|compramos) (una|un|la|el|mi)? ?(impresora|laptop|equipo|maquina|monitor|camara|computadora)\b/) && !wantsService(text)) ||
@@ -131,11 +139,13 @@ export const followsUpCase = (text: string) =>
 
 /** Mensajes de relleno: "ok", "bueno", "gracias", "deme un momento", "Mmm, entiendo. Continúa." (solo esas palabras). */
 const ACK_WORDS = new Set(
-  "si sii ok okey okay bueno listo dale gracias muchas mil vale perfecto entiendo entendido ya ah mmm mm continua continue deme un momento espere espera vuelvo estamos a la orden por favor porfa amiga amigo genial chevere excelente de nada".split(" "),
+  "si sii ok okey okay bueno listo dale gracias muchas mil vale perfecto entiendo entendido ya ah mmm mm continua continue deme un momento espere espera vuelvo estamos a la orden por favor porfa amiga amigo genial chevere excelente de nada esta bien todo muy super buenisimo".split(" "),
 );
 export const isAck = (text: string) => {
   // "A4", "L3250": con numeros es un dato, no relleno (chat real: "A4" respondia "De una 😊").
   if (/\d/.test(text)) return false;
+  // Solo emojis de ok o gracias: "👍", "🫡🫡🫡", "🙏", "👌" (chats reales oct-15).
+  if (/^[\s👍👌🙏🫡🤝✅💙❤️😊🙂☺️.!]+$/u.test(text.trim()) && /[👍👌🙏🫡🤝✅💙❤😊🙂☺]/u.test(text)) return true;
   const words = normalize(text).replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
   return words.length > 0 && words.length <= 6 && words.every((word) => ACK_WORDS.has(word) || /^m+$/.test(word) || /^o+k+$/.test(word));
 };

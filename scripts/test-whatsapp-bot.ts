@@ -371,13 +371,13 @@ async function main() {
     assert.match(result.reply, /enviado 🚚 · guía Servientrega SV123[\s\S]*megaprinter\.ec\/pedido\/t/);
   });
 
-  await test("servicio técnico: pide nombre, equipo y problema, muestra precio y crea ticket al confirmar", async () => {
+  await test("servicio técnico: pide equipo, problema y al final el nombre, muestra precio y crea ticket al confirmar", async () => {
     const fake = fakeDeps();
-    const results = await conversation(fake, ["necesito servicio técnico", "Juan Pérez", "1", "no imprime, sale con rayas", "si"]);
-    assert.equal(results[0].step, "ticket_name");
-    assert.equal(results[1].step, "ticket_device");
-    assert.match(results[1].reply, /Impresora[\s\S]*Laptop/);
-    assert.equal(results[2].step, "ticket_issue");
+    const results = await conversation(fake, ["necesito servicio técnico", "1", "no imprime, sale con rayas", "Juan Pérez", "si"]);
+    assert.equal(results[0].step, "ticket_device");
+    assert.match(results[0].reply, /Impresora[\s\S]*Laptop/);
+    assert.equal(results[1].step, "ticket_issue");
+    assert.equal(results[2].step, "ticket_name", "el nombre va al final");
     const summary = results[3];
     assert.equal(summary.step, "ticket_confirm");
     assert.match(summary.reply, /Servicio técnico[\s\S]*Impresora[\s\S]*no imprime[\s\S]*\$20 – \$35[\s\S]*diagnóstico es sin costo/);
@@ -400,14 +400,14 @@ async function main() {
 
   await test("'servicio técnico para mi impresora' no es la descripción; 'no imprime' en el resumen es detalle, no un 'no'", async () => {
     const fake = fakeDeps();
-    const results = await conversation(fake, ["necesito servicio técnico para mi impresora", "Juan Pérez", "no imprime, sale con rayas", "no enciende a veces", "si"]);
+    const results = await conversation(fake, ["necesito servicio técnico para mi impresora", "no imprime, sale con rayas", "Juan Pérez", "no enciende a veces", "si"]);
     assert.equal(results[0].state.ticket.device, "impresora");
     assert.equal(results[0].state.ticket.issue, "", "todavía no contó el problema");
-    assert.equal(results[1].step, "ticket_issue");
+    assert.equal(results[0].step, "ticket_issue");
     assert.equal(results[2].step, "ticket_confirm");
     assert.equal(results[3].decision, "R10:ticket_mas_detalle", "'no enciende…' agrega detalle, no corrige");
     assert.equal(results[4].decision, "R10:ticket_creado");
-    const corrected = await conversation(fakeDeps(), ["necesito servicio técnico", "Eva Ruiz", "2", "pantalla rota", "no"]);
+    const corrected = await conversation(fakeDeps(), ["necesito servicio técnico", "2", "pantalla rota", "Eva Ruiz", "no"]);
     // En produccion "No" al resumen era "no lo registres": se cancela, no se vuelve a pedir el problema.
     assert.equal(corrected.at(-1)!.decision, "R10:ticket_cancelado");
     assert.equal(corrected.at(-1)!.step, "idle");
@@ -415,7 +415,7 @@ async function main() {
 
   await test("suministros: pide el detalle y crea la solicitud sin precio", async () => {
     const fake = fakeDeps();
-    const results = await conversation(fake, ["necesito tinta", "Carla Vera", "tinta negra para Epson L3250", "sí"]);
+    const results = await conversation(fake, ["necesito tinta", "tinta negra para Epson L3250", "Carla Vera", "sí"]);
     assert.equal(results[2].step, "ticket_confirm");
     assert.match(results[2].reply, /Suministros[\s\S]*Epson L3250[\s\S]*cotizamos/);
     assert.equal(results[3].route, "human");
@@ -438,7 +438,7 @@ async function main() {
     assert.doesNotMatch(exact.reply, /Tintas 664/);
     const real = await conversation(fake, ["Tenia una tinta cyan por retirar 748xxl", "cotizar", "Zuleika Wan", "sí"]);
     assert.match(real[0].reply, /No tengo la \*748XXL\*[\s\S]*Tintas 544/);
-    assert.equal(real[1].step, "ticket_name");
+    assert.equal(real[1].step, "ticket_name", "ya contó qué tinta: solo falta el nombre");
     assert.equal(real[2].step, "ticket_confirm");
     assert.match(real[2].reply, /748xxl/);
     assert.equal(fake.tickets[0].type, "suministros");
@@ -788,12 +788,12 @@ async function main() {
     assert.match(price.reply, /sin costo/);
     const asked = await conversation(fakeDeps(), ["Hola Megaprinter, necesito agendar un diagnóstico técnico.", "Que precio tiene. La revisión?"]);
     assert.equal(asked[1].decision, "R10:ticket_precio");
-    assert.match(asked[1].reply, /sin costo[\s\S]*nombre/);
-    const loop = await conversation(fakeDeps(), ["No imprime todos los colores al momento de impresión", "Maria Pozo", "1", "Deseo saber precio de impresora Epson L3250"]);
+    assert.match(asked[1].reply, /sin costo[\s\S]*equipo/);
+    const loop = await conversation(fakeDeps(), ["No imprime todos los colores al momento de impresión", "1", "Maria Pozo", "Deseo saber precio de impresora Epson L3250"]);
     assert.equal(loop[2].step, "ticket_confirm");
     assert.notEqual(loop[3].decision, "R10:ticket_mas_detalle", "un precio de producto no se pega al problema");
     assert.equal(loop[3].state.ticket.type, "");
-    const out = await conversation(fakeDeps(), ["mi impresora no imprime", "Maria Pozo", "Cambio de tema"]);
+    const out = await conversation(fakeDeps(), ["mi impresora no imprime", "Cambio de tema"]);
     assert.equal(out.at(-1)!.decision, "R10:ticket_cancelado");
     const parts = await conversation(fakeDeps(), ["Y el cabezal de color para esta impresora"]);
     assert.equal(parts[0].decision, "R10:suministros", "repuestos se cotizan, no 'no vendemos'");
@@ -842,14 +842,15 @@ async function main() {
     const laptops = (await conversation(fakeDeps(), ["hola", "2"]))[1];
     assert.match(laptops.reply, /HP 15[\s\S]*Dell/);
     const service = (await conversation(fakeDeps(), ["hola", "5"]))[1];
-    assert.equal(service.step, "ticket_name");
+    assert.equal(service.step, "ticket_device");
     const human = (await conversation(fakeDeps(), ["hola", "8"]))[1];
     assert.equal(human.route, "human");
     assert.equal(human.notifyTeam, true, "avisa al equipo");
     assert.equal(decideRoute(hello.state, { message: "8" }, { bank: true, cardEnabled: true }).route, "human");
     assert.equal(decideRoute(hello.state, { message: "7" }, { bank: true, cardEnabled: true }).route, "catalog");
     const again = await conversation(fakeDeps(), ["asesor", "asesor"]);
-    assert.equal(again[1].notifyTeam, false, "no repite el correo en 30 min");
+    assert.equal(again[1].decision, "R2:esperando_asesor", "en traspaso no repite el aviso");
+    assert.ok(!again[1].notifyTeam, "no repite el correo en 30 min");
     const [menu] = await conversation(fakeDeps(), ["menú"]);
     assert.equal(menu.decision, "R9:menu");
   });
@@ -870,8 +871,12 @@ async function main() {
     // Nombre con la empresa: se toma el nombre; sin nombre dos veces pasa a una persona.
     const named = await conversation(fakeDeps(), ["necesitamos el toner magenta para la Xerox 6515", "le escribe Juan Carlos Pérez de Tecnycomp"]);
     assert.equal(named[1].state.customerName, "Juan Carlos Pérez");
-    const noName = await conversation(fakeDeps(), ["necesitamos el toner magenta para la Xerox 6515", "RUC 0992513837001", "otra cosa"]);
-    assert.equal(noName[2].route, "human");
+    // Sin nombre dos veces: se registra igual (antes pasaba a una persona sin solicitud).
+    const noNameFake = fakeDeps();
+    const noName = await conversation(noNameFake, ["necesitamos el toner magenta para la Xerox 6515", "RUC 0992513837001", "otra cosa", "sí"]);
+    assert.equal(noName[2].step, "ticket_confirm");
+    assert.equal(noName[3].decision, "R10:ticket_creado");
+    assert.equal(noNameFake.tickets[0].customerName, "Cliente de WhatsApp");
     // Proveedor en ingles: no se le pide el nombre en bucle.
     assert.equal((await conversation(fakeDeps(), ["Good day boss! My name is Tonny from Shanghai which is a manufacturer of compatible toner, would you like more details?"]))[0].route, "human");
     // "catálogo de laptop" muestra las laptops, no el resumen de la tienda.
@@ -889,6 +894,79 @@ async function main() {
     assert.equal(await decision("hola", "5", "Leonardo Rodríguez", "1", "y eso cuanto demora?"), "R10:ticket_pregunta");
     // "me pasas el numero de cuenta" sigue dando las cuentas.
     assert.equal(await decision("me pasas el numero de cuenta"), "R3:datos_cuenta");
+  });
+
+  await test("chats reales oct-15: servicio técnico sin muro del nombre, 'No prende' es el problema, anuncio", async () => {
+    const fake = fakeDeps();
+    const ad = await conversation(fake, ["vi su anuncio y me interesa el servicio técnico. ¿Me pueden dar más info?", "2", "No prende", "Buen día Wilmer Barco.", "sí"]);
+    assert.match(ad[0].reply, /diagnóstico es sin costo[\s\S]*Con qué equipo/);
+    assert.equal(ad[0].state.ticket.issue, "", "'vi su anuncio' no es el problema");
+    assert.equal(ad[2].decision, "R10:ticket_detalle", "'No prende' no cancela");
+    assert.equal(ad[3].state.customerName, "Wilmer Barco");
+    assert.equal(ad[4].decision, "R10:ticket_creado");
+    assert.equal(fake.tickets[0].issue, "No prende");
+    const voy = await conversation(fakeDeps(), ["mi laptop no prende", "Voy en camino"]);
+    assert.notEqual(voy[1].state.customerName, "Voy en camino");
+    const named = await conversation(fakeDeps(), ["mi laptop no prende", "Q tal buen día soy Eduardo Arámbulo"]);
+    assert.equal(named[1].state.customerName, "Eduardo Arámbulo");
+    const device = await conversation(fakeDeps(), ["necesito servicio técnico", "Para fin de semana"]);
+    assert.equal(device[1].step, "ticket_device", "vuelve a preguntar el equipo");
+    const store = await conversation(fakeDeps(), ["mi impresora no imprime", "Dirección del negocio"]);
+    assert.equal(store[1].decision, "R8:tienda");
+  });
+
+  await test("chats reales oct-15: seguimientos, visitas, relleno y dirección", async () => {
+    const decision = async (...messages: string[]) => (await conversation(fakeDeps(), messages)).at(-1)!.decision;
+    for (const followUp of [
+      "Tengo pendiente q retirar una computadora",
+      "Quiero saber en k estado está mi laptop",
+      "Buenas Tardes Soy el chico que llevo la laptop Me gustaría saber si ya tienen el diagnóstico, cuanto es y cuando estaría lista.",
+      "Buenos días me podría informar si ya se pudo arreglar lo de mi laptop espero una respuesta",
+      "Bendiciones! José Campos le saluda referente a la transferencia realizada por la compra de la impresora canon.",
+    ]) {
+      assert.equal(await decision(followUp), "R2:seguimiento_caso", followUp);
+    }
+    for (const visit of ["Llegando", "En la esquina", "Ya mismo paso por ahí", "Ya m acerco al local gracias", "Voy en camino"]) {
+      assert.equal(await decision(visit), "R2:coordinar_visita", visit);
+      assert.equal(decideRoute(null, { message: visit }, { bank: true, cardEnabled: true }).route, "human", `/brain: ${visit}`);
+    }
+    for (const ack of ["👍", "🫡🫡🫡", "Esta bien", "Ya está bien"]) assert.equal(await decision(ack), "R9:ok", ack);
+    for (const address of ["me pasa la dirección", "Buenas noches. Dirección", "Direcion"]) assert.equal(await decision(address), "R8:tienda", address);
+    assert.match(await decision("Buena tardes"), /^R9:saludo/);
+    assert.equal(await decision("Vengo de TikTok"), "R9:saludo_anuncio");
+    const name = (await conversation(fakeDeps(), ["Soy jaime giler"]))[0];
+    assert.equal(name.decision, "R9:nombre");
+    assert.equal(name.state.customerName, "jaime giler");
+  });
+
+  await test("chats reales oct-15: persona, traspaso en silencio y lista que ya no aplica", async () => {
+    const decision = async (...messages: string[]) => (await conversation(fakeDeps(), messages)).at(-1)!;
+    assert.equal((await decision("Eres IA podría por favor atenderme una persona?")).route, "human");
+    assert.equal((await decision("hablo con una persona o con un robot?")).decision, "R2:soy_un_bot");
+    assert.equal((await decision("laptop i7", "Un acesor")).route, "human");
+    // "te paso con alguien? Respóndeme sí" termina con el menú: el "Si" igual acepta (3 chats reales).
+    const vague = fakeDeps();
+    vague.deps.extract = async () => ({ intent: "otro", items: [], remove: [], searchQuery: "", suggestions: [], source: "ai" }) as any;
+    const offered = await conversation(vague, ["mi primo me dijo que ustedes saben de esas cosas que pasan", "Si"]);
+    assert.equal(offered[0].decision, "R9:no_entendido_ofrece_asesor");
+    assert.equal(offered[1].route, "human");
+    // Pasó a una persona: lo que le dice a la asesora no abre tickets ni busca productos.
+    const handoff = await conversation(fakeDeps(), ["asesor", "Buen día srta. Domenica Hoy para llevar mi equipo para el cambio de pantalla", "Podrías ayudarme pasando la cotización por favor", "menú", "2"]);
+    assert.equal(handoff[1].decision, "R2:esperando_asesor");
+    assert.equal(handoff[1].route, "human");
+    assert.equal(handoff[1].state.ticket.type, "", "no abre ticket");
+    assert.equal(handoff[2].decision, "R2:esperando_asesor");
+    assert.equal(decideRoute(handoff[1].state, { message: "Srta. Si acepta transferencia" }, { bank: true, cardEnabled: true }).route, "human", "/brain lo manda al flujo que silencia");
+    assert.equal(handoff[3].decision, "R9:menu", "menú vuelve al bot");
+    assert.equal(handoff[4].decision, "R5:menu_laptops");
+    // Con una lista a la vista, un pedido nuevo largo no responde "elige el número".
+    const inks = await decision("impresora", "Hola buenas tardes el precio del juego de tintas para la Epson");
+    assert.notEqual(inks.decision, "R9:eleccion_no_entendida");
+    // Foto de su equipo en medio del ticket: no se ofrece comprar.
+    const photoFake = fakeDeps({ receipt: { status: "image", kind: "product", description: "una laptop HP con la pantalla dañada", productIds: ["p1"], exactMatch: false, searchQuery: "laptop hp" } as any });
+    const photo = await conversation(photoFake, ["mi laptop tiene la pantalla rota", { media: "https://x/foto.jpg" }]);
+    assert.equal(photo[1].decision, "R1:foto_del_ticket");
+    assert.equal(photo[1].state.cart.length, 0);
   });
 
   console.log(`\n${passed} ok, ${failed} fallaron`);

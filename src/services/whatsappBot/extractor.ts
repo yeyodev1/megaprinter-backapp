@@ -1,6 +1,7 @@
 import { geminiJson } from "../gemini.service";
 import { BotProduct, money, normalize } from "./catalog";
 import { detectPaymentMethod, extractEmail, isGreeting, wantsCatalog, wantsHuman, wantsTracking } from "./intents";
+import { lessonsForPrompt } from "./learning";
 import { storeFactsForPrompt } from "./store";
 
 /**
@@ -154,7 +155,8 @@ export const aiExtract: Extractor = async (message, context) => {
   const fallback = await heuristicExtract(message, context);
   const parsed = await geminiJson<any>({
     // Las sucursales se editan en el panel: se ponen en cada llamada, no al cargar el modulo.
-    system: `${PROMPT.replace("{{STORE}}", storeFactsForPrompt())}\n\nCATÁLOGO:\n${catalogForPrompt(context.catalog)}`,
+    // Lecciones de la revision diaria de chats (Sistema → Aprendizaje).
+    system: `${PROMPT.replace("{{STORE}}", storeFactsForPrompt())}${lessonsForPrompt()}\n\nCATÁLOGO:\n${catalogForPrompt(context.catalog)}`,
     text: [
       // Sin la fecha la IA decia "hoy domingo" un sabado (chats reales 9 y 10 oct).
       `Hoy es: ${new Intl.DateTimeFormat("es-EC", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "America/Guayaquil" }).format(new Date())} (hora de Ecuador)`,

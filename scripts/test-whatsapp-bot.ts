@@ -15,6 +15,8 @@ import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult,
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 import { estimateService } from "../src/services/whatsappBot/serviceCatalog";
+import { lessonsForPrompt, reviewLesson } from "../src/services/whatsappBot/learning";
+import { transcriptsForPrompt } from "../src/services/botLearning.service";
 
 const CATALOG: BotProduct[] = [
   { id: "p1", name: "Laptop HP 15 Core i5 16GB RAM 512GB SSD", price: 649, originalPrice: 749, category: "Laptops", kind: "product", description: "Laptop para trabajo y estudio", specs: "Procesador: Intel Core i5; RAM: 16GB; Almacenamiento: 512GB SSD" },
@@ -998,6 +1000,30 @@ async function main() {
     assert.equal((await conversation(fakeDeps(), ["No tiene eso"]))[0].decision, "R2:no_esta_en_catalogo");
     const missing = (await conversation(fakeDeps(), ["quiero un proyector epson"]))[0];
     assert.equal(missing.decision, "R2:no_esta_en_catalogo");
+  });
+
+  await test("aprendizaje diario: qué lecciones se activan solas, cuáles esperan y cuáles se descartan", async () => {
+    const frase = reviewLesson({ tipo: "frase", leccion: "Cuando escriben 'la de tanque' se refieren a impresoras de tinta continua.", ejemplo: "tiene la de tanque?" }, []);
+    assert.equal(frase?.status, "activa");
+    assert.equal(reviewLesson({ tipo: "evitar", leccion: "Si el cliente manda solo 'ok' tras la ubicación, no le repitas el menú." }, [])?.status, "activa");
+    assert.equal(reviewLesson({ tipo: "respuesta", leccion: "Si preguntan si hacen envíos a Quito, di que sí y que el costo lo confirma el equipo." }, [])?.status, "pendiente", "las respuestas las aprueba el equipo");
+    assert.equal(reviewLesson({ tipo: "evitar", leccion: "Cuando preguntan por la garantía, explica que es de 12 meses en laptops." }, [])?.status, "pendiente", "con números espera aprobación");
+    assert.equal(reviewLesson({ tipo: "frase", leccion: "Algo del negocio que la IA no está segura de afirmar", confirmar: true }, [])?.status, "pendiente");
+    assert.equal(reviewLesson({ tipo: "respuesta", leccion: "Si preguntan cuánto cuesta la reparación de pantalla, di que vale $45." }, []), null, "nunca precios de reparación");
+    assert.ok(reviewLesson({ tipo: "evitar", leccion: "Nunca des el precio de una reparación aunque el cliente insista; ofrece la revisión." }, []), "prohibirlo sí se puede");
+    assert.equal(reviewLesson({ tipo: "frase", leccion: "Qué chévere, cuando dicen 'pana' es amigo." }, []), null);
+    assert.equal(reviewLesson({ tipo: "otra", leccion: "Algo con un tipo que no existe en la lista" }, []), null);
+    assert.equal(reviewLesson({ tipo: "frase", leccion: "Cuando escriben 'la de tanque' hablan de impresoras de tinta continua." }, [frase!.lesson.text]), null, "no repite lecciones");
+    const prompt = lessonsForPrompt([frase!.lesson]);
+    assert.match(prompt, /APRENDIZAJES[\s\S]*la de tanque[\s\S]*tiene la de tanque/);
+    assert.equal(lessonsForPrompt([]), "");
+    const at = new Date("2026-10-14T15:00:00Z");
+    const text = transcriptsForPrompt([
+      { phone: "+593999999999", problems: 3, events: [{ message: "tiene la de tanque?", reply: "No encontré eso", decision: "R8:sin_resultados", route: "", createdAt: at }] },
+      { phone: "+593988888888", problems: 0, events: [{ message: "x".repeat(400), reply: "ok", decision: "R9:saludo", route: "", createdAt: at }] },
+    ], 200);
+    assert.match(text, /Chat 1[\s\S]*Cliente: tiene la de tanque\?[\s\S]*R8:sin_resultados/);
+    assert.doesNotMatch(text, /593999999999|Chat 2/, "sin teléfonos y respeta el tope");
   });
 
   console.log(`\n${passed} ok, ${failed} fallaron`);

@@ -16,6 +16,8 @@ interface GeminiJsonRequest {
   image?: { mimeType: string; base64: string };
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /** Solo para tareas sin apuro (aprendizaje diario); el chat va sin "thinking". */
+  thinkingBudget?: number;
 }
 
 export async function geminiJson<T = any>(request: GeminiJsonRequest): Promise<T | null> {
@@ -36,7 +38,7 @@ export async function geminiJson<T = any>(request: GeminiJsonRequest): Promise<T
           responseMimeType: "application/json",
           maxOutputTokens: request.maxOutputTokens ?? 800,
           // Sin "thinking": cada segundo cuenta contra el timeout de BuilderBot.
-          thinkingConfig: { thinkingBudget: 0 },
+          thinkingConfig: { thinkingBudget: request.thinkingBudget ?? 0 },
         },
       },
       { timeout: request.timeoutMs ?? 12000 },

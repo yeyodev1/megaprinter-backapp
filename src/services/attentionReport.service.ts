@@ -15,7 +15,7 @@ import { escapeHtml, sendEmail, storeRecipients } from "./email.service";
 
 // Ecuador no tiene horario de verano: UTC-5 fijo.
 const OFFSET_MS = 5 * 60 * 60 * 1000;
-const NOT_UNDERSTOOD = /^R9:(no_entendido|eleccion_no_entendida)$|^R8:(sin_resultados|fuera_de_tema)$/;
+export const NOT_UNDERSTOOD = /^R9:(no_entendido|eleccion_no_entendida)$|^R8:(sin_resultados|fuera_de_tema)$/;
 const INSISTS_AFTER_MS = 15 * 60 * 1000;
 
 export type HandoffStatus = "atendido" | "sin_atender" | "posible_sin_atender" | "sin_confirmar";
@@ -42,11 +42,14 @@ export interface AttentionReport {
 }
 
 /** "YYYY-MM-DD" de hoy en Ecuador (o de hace `daysAgo` dias). */
+// +5939900000xx son simulaciones de prueba, no clientes.
+export const isTestPhone = (phone: string) => /^\+?5939900000\d\d$/.test(phone);
+
 export function ecuadorDate(daysAgo = 0) {
   return new Date(Date.now() - OFFSET_MS - daysAgo * 86400000).toISOString().slice(0, 10);
 }
 
-function dayRange(date: string) {
+export function dayRange(date: string) {
   const [y, m, d] = date.split("-").map(Number);
   const start = new Date(Date.UTC(y, m - 1, d) + OFFSET_MS);
   return { start, end: new Date(start.getTime() + 86400000) };
@@ -57,8 +60,7 @@ export async function buildAttentionReport(date = ecuadorDate()): Promise<Attent
   const events: any[] = await BotEventModel.find({ kind: "turn", duplicated: { $ne: true }, createdAt: { $gte: start, $lt: end } })
     .sort({ createdAt: 1 })
     .lean();
-  // +5939900000xx son simulaciones de prueba, no clientes.
-  const phones = [...new Set(events.map((event) => event.phone))].filter((phone) => !/^\+?5939900000\d\d$/.test(phone));
+  const phones = [...new Set(events.map((event) => event.phone))].filter((phone) => !isTestPhone(phone));
   const sessions: any[] = await WhatsAppSessionModel.find({ phone: { $in: phones } }, { phone: 1, "state.customerName": 1 }).lean();
   const nameOf = new Map(sessions.map((session) => [session.phone, session.state?.customerName || ""]));
   const tickets = await ServiceTicketModel.countDocuments({ createdAt: { $gte: start, $lt: end } });

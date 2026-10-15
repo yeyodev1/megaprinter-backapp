@@ -347,12 +347,12 @@ function missingStage(state: BotState, deps: BotDeps): Stage {
 }
 
 const NOT_NAME_WORDS = new Set(
-  "esta este esa ese estos estas misma mismo mismas igual eso esto aqui ahi otra otro cual cuanto precio quiero necesito tengo tiene tienen busco para por favor gracias ok listo bueno dale resma papel tinta laptop impresora monitor camara asesor persona hola buenas voy camino direccion donde son venden porfa proforma marca ayudeme ayudame pilas lleve hubieran que como cuando local tienda fin semana manana hoy si no buena buen tardes dias noches".split(" "),
+  "esta este esa ese estos estas misma mismo mismas igual eso esto aqui ahi otra otro cual cuanto precio quiero necesito tengo tiene tienen busco para por favor gracias ok listo bueno dale resma papel tinta laptop impresora monitor camara asesor persona hola buenas voy camino direccion donde son venden porfa proforma marca ayudeme ayudame pilas lleve hubieran que como cuando local tienda fin semana manana hoy si no buena buen tardes dias noches un una hp epson canon lenovo dell asus acer samsung brother lg apple macbook xerox ricoh toshiba huawei xiaomi".split(" "),
 );
 
 const looksLikeName = (text: string) => {
   const value = text.trim();
-  // "Está misma", "la de antes": respuestas que no son un nombre (chat real oct-2026).
+  // "Está misma", "la de antes", "una hp" (marca en el paso del nombre, chat de oct-14): respuestas que no son un nombre.
   const notName = normalize(value).split(" ").some((word) => NOT_NAME_WORDS.has(word));
   return /^[\p{L}][\p{L}' .-]{1,60}$/u.test(value) && value.split(/\s+/).length <= 5 && !isYes(value) && !isNo(value) && !isGreeting(value) && !notName;
 };

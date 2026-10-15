@@ -1002,6 +1002,12 @@ async function main() {
     assert.equal(missing.decision, "R2:no_esta_en_catalogo");
   });
 
+  await test("revisión diaria oct-14: una marca en el paso del nombre no es un nombre", async () => {
+    const turns = await conversation(fakeDeps(), ["mi laptop no prende", "una hp"]);
+    assert.equal(turns[1].decision, "R10:ticket_nombre_invalido");
+    assert.doesNotMatch(turns[1].reply, /👤 Una Hp/i);
+  });
+
   await test("aprendizaje diario: qué lecciones se activan solas, cuáles esperan y cuáles se descartan", async () => {
     const frase = reviewLesson({ tipo: "frase", leccion: "Cuando escriben 'la de tanque' se refieren a impresoras de tinta continua.", ejemplo: "tiene la de tanque?" }, []);
     assert.equal(frase?.status, "activa");

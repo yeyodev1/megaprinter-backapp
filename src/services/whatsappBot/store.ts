@@ -16,10 +16,14 @@ export const STORE = {
   email: "info@megaprinter.ec",
 };
 
+/** Link de Google Maps de cada local: el cliente pide "la ubicación" para llegar (Johnny, 15-oct). */
+export const mapsUrl = (location: string) =>
+  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`Megaprinter ${location}, ${STORE.city}, Ecuador`)}`;
+
 export const storeInfoText = () =>
   [
     `Estamos en *${STORE.city}* 📍`,
-    ...STORE.locations.map((location) => `• ${location}`),
+    ...STORE.locations.flatMap((location) => [`• ${location}`, mapsUrl(location)]),
     "",
     "🕒 *Horarios*",
     ...STORE.hours.map((line) => `• ${line}`),

@@ -1002,6 +1002,8 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   // Donde queda la tienda y horarios (datos fijos, la IA no los inventa).
   if (asksStoreInfo(message) && state.stage !== "address") {
     const text = asksOnlyHours(message) ? `🕒 Nuestros horarios:\n${STORE.hours.map((line) => `• ${line}`).join("\n")}` : storeInfoText();
+    // En medio de una solicitud de servicio: se da la direccion y se sigue con lo que faltaba.
+    if (isTicketStage(state.stage)) return askTicketNext(state, deps, "R8:tienda", text);
     return withPending(state, deps, text, "R8:tienda");
   }
 

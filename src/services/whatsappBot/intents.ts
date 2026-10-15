@@ -103,6 +103,8 @@ export const asksStoreInfo = (text: string) =>
   !/@|\bruc\b/i.test(text) &&
   (  // "me pasa la dirección", "Dirección para ir", "Direcion" (chats reales oct-15): la direccion en cualquier parte.
   has(text, /\bdirec+(c|s)?i?on\b/) ||
+  // "Local fisicobtienen", "Tienen local físico", "De local", "como llego", "mapa", "gps" (chats reales 12-13 oct).
+  has(text, /\b(local fisic\w*|tienen (un )?local|tienen tienda|como llego|como llegar|mapa|gps|ubicad[oa]s?|ubicacion)\b|^(de|del|el|su) local$/) ||
   has(text, /\b(ubicacion|ubicaciones|ubican|ubicados|donde (estan|quedan|queda|se encuentran|los encuentro)|direccion (de la tienda|del local|de su local|de sus locales|de ustedes)|su local|sus locales|sucursal(es)?|horarios?|a que hora (abren|cierran|atienden)|abren|cierran|atienden (los )?(sabados|domingos|hoy))\b/) ||
   has(text, /^(la )?direccion\??$/));
 

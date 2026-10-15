@@ -969,6 +969,19 @@ async function main() {
     assert.equal(photo[1].state.cart.length, 0);
   });
 
+  await test("ubicación (audio de Johnny 15-oct): siempre manda direcciones con link de Google Maps; catálogo con link", async () => {
+    for (const ask of ["Direcsion", "Me.ayuda con la dirección", "Local fisicobtienen", "Tienen local físico aquí en Guayaquil", "Ayudame con la ubicación", "Paseme la ubicación para llevar la pc", "Buenas noches la dirección", "como llego"]) {
+      const [result] = await conversation(fakeDeps(), [ask]);
+      assert.equal(result.decision, "R8:tienda", ask);
+      assert.match(result.reply, /Tungurahua 103[\s\S]*google\.com\/maps[\s\S]*Tungurahua 205[\s\S]*google\.com\/maps/, ask);
+    }
+    const midTicket = await conversation(fakeDeps(), ["mi laptop no prende", "Dirección del local"]);
+    assert.equal(midTicket[1].decision, "R8:tienda");
+    assert.match(midTicket[1].reply, /google\.com\/maps[\s\S]*nombre/, "da la dirección y sigue con el ticket");
+    const [catalog] = await conversation(fakeDeps(), ["hola", "7"]).then((r) => r.slice(1));
+    assert.match(catalog.reply, /Catálogo completo[\s\S]*\/products/);
+  });
+
   console.log(`\n${passed} ok, ${failed} fallaron`);
   if (failed) process.exit(1);
 }

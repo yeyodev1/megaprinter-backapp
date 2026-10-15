@@ -120,6 +120,9 @@ export function catalogOverview(catalog: BotProduct[], storeUrl: string) {
     "",
     ...lines,
     "",
-    `Dime qué buscas (ej. "laptop para la U", "impresora de tinta continua") y te muestro opciones. También puedes ver todo en ${storeUrl}/products`,
+    "🛒 Catálogo completo con fotos y precios:",
+    `${storeUrl}/products`,
+    "",
+    `Dime qué buscas (ej. "laptop para la U", "impresora de tinta continua") y te muestro opciones 😊`,
   ].join("\n");
 }

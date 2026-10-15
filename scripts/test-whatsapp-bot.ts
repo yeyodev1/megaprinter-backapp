@@ -995,6 +995,7 @@ async function main() {
     assert.match(keyboard.reply, /comunicándote con un asesor/);
     assert.equal((await conversation(fake, ["No tiene eso"]))[0].route, "human");
     assert.equal((await conversation(fake, ["hazme la tarea de historia"]))[0].decision, "R8:fuera_de_tema", "lo que no es del negocio sigue redirigido");
+    assert.equal((await conversation(fakeDeps(), ["No tiene eso"]))[0].decision, "R2:no_esta_en_catalogo");
     const missing = (await conversation(fakeDeps(), ["quiero un proyector epson"]))[0];
     assert.equal(missing.decision, "R2:no_esta_en_catalogo");
   });

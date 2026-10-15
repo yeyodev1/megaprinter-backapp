@@ -995,6 +995,10 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     return reply(state, "De una 😊 Aquí estoy para lo que necesites. Si quieres ver las opciones, escríbeme *menú* 💙", "R9:ok");
   }
 
+  // "No tiene eso?", "tienen eso": insiste en algo que el bot no supo darle (Johnny, 15-oct): lo atiende un asesor.
+  if (!state.cart.length && /^(y |pero )?(no )?(tiene|tienen|hay|venden) (eso|esto|ese|esa|eso que (le|te) (pedi|dije))\b/.test(normalize(message))) {
+    return toHuman(state, NOT_IN_CATALOG_REPLY, "R2:no_esta_en_catalogo");
+  }
   // "Cuenta Pichincha", "numero de cuenta": datos para transferir (chat real: el bot no lo entendia).
   if (!state.cart.length && ["idle", "choosing", "ordered"].includes(state.stage) && deps.banks.length) {
     const askedBank = /\b(cuentas?|transfer\w*|deposit\w*|banco)\b/.test(normalize(message)) ? detectBank(message, deps.banks) : null;

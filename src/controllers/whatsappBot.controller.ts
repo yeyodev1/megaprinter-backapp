@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { loadStore } from "../services/whatsappBot/store";
 import { Request, Response } from "express";
 import { OrderModel } from "../models/order.model";
 import { ProductModel } from "../models/product.model";
@@ -381,6 +382,8 @@ async function findOrders(phone: string, orderNumber?: string): Promise<OrderSum
 }
 
 async function buildDeps(phone: string): Promise<BotDeps> {
+  // Sucursales del panel (cache 1 min): direccion, link de Maps y horarios.
+  await loadStore();
   return {
     loadCatalog,
     extract: geminiEnabled() ? aiExtract : heuristicExtract,

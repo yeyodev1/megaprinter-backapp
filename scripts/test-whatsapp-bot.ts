@@ -729,7 +729,7 @@ async function main() {
       assert.doesNotMatch(result.reply, /Quito/);
     }
     const [hours] = await conversation(fakeDeps(), ["Horario"]);
-    assert.match(hours.reply, /Sábados/);
+    assert.match(hours.reply, /Sábado: 9:00 AM/);
     for (const message of [
       "me confirma amiga",
       "Buen dia Me puede dar información sobre mi laptop que dejé en dia sábado Gracias",
@@ -973,11 +973,11 @@ async function main() {
     for (const ask of ["Direcsion", "Me.ayuda con la dirección", "Local fisicobtienen", "Tienen local físico aquí en Guayaquil", "Ayudame con la ubicación", "Paseme la ubicación para llevar la pc", "Buenas noches la dirección", "como llego"]) {
       const [result] = await conversation(fakeDeps(), [ask]);
       assert.equal(result.decision, "R8:tienda", ask);
-      assert.match(result.reply, /Tungurahua 103[\s\S]*google\.com\/maps[\s\S]*Tungurahua 205[\s\S]*google\.com\/maps/, ask);
+      assert.match(result.reply, /Tungurahua 103, entre Luis Vernaza[\s\S]*maps\.app\.goo\.gl\/whLgVu9tGFrCfpd37[\s\S]*Tungurahua 205[\s\S]*maps\.app\.goo\.gl\/RTPBZoKzijt7rzub9[\s\S]*Domingo: 10:00 AM/, ask);
     }
     const midTicket = await conversation(fakeDeps(), ["mi laptop no prende", "Dirección del local"]);
     assert.equal(midTicket[1].decision, "R8:tienda");
-    assert.match(midTicket[1].reply, /google\.com\/maps[\s\S]*nombre/, "da la dirección y sigue con el ticket");
+    assert.match(midTicket[1].reply, /maps\.app\.goo\.gl[\s\S]*nombre/, "da la dirección y sigue con el ticket");
     const [catalog] = await conversation(fakeDeps(), ["hola", "7"]).then((r) => r.slice(1));
     assert.match(catalog.reply, /Catálogo completo[\s\S]*\/products/);
   });

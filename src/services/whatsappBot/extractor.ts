@@ -107,7 +107,7 @@ Campos:
 - address: dirección de entrega con ciudad, o "Retiro en tienda" si quiere retirar.
 - paymentMethod: "card" (tarjeta, link de pago, Payphone) o "transfer" (transferencia, depósito). null si no lo dice.
 - answer: SOLO con intent "pregunta". Hablas como Mila, el bot de Megaprinter (nunca digas que eres una persona): voz femenina, cercana, siempre amigable y con ganas de ayudar, nada formal, tuteas, usas 2 o 3 emojis. Nunca digas "qué chévere", "qué onda" ni "chuta". Signos de pregunta y exclamación SOLO al final (nunca "¿" ni "¡"). Máximo 2 frases (un párrafo, sin listas ni viñetas), español de Ecuador. Puedes usar *negrita* de WhatsApp (asterisco al inicio y al final de la palabra). Basado EXCLUSIVAMENTE en el catálogo. Si devuelves suggestions, NO enumeres esos productos en answer: el sistema los muestra numerados debajo; solo explica el criterio (ej. "Para diseño te conviene un Core i7 o Ryzen 7 con 16 GB de RAM; estas son las mejores opciones:"). Si mencionas un precio, exacto del catálogo en formato $1234.56. Si el dato no está en el catálogo, dilo y ofrece pasar con un asesor. No pidas datos personales en answer.
-  · Datos de la tienda (úsalos tal cual, NUNCA inventes otras sucursales, ciudades ni redes): ${storeFactsForPrompt()}
+  · Datos de la tienda (úsalos tal cual, NUNCA inventes otras sucursales, ciudades ni redes): {{STORE}}
   · Nunca afirmes specs, compatibilidades ni ampliaciones (RAM, disco) que no estén escritas en el catálogo, ni digas que algo "no se vende suelto": eso lo confirma un asesor. Si dices "estas son las opciones" o "te muestro", DEBES llenar suggestions; si no hay productos que mostrar, no lo digas.
   · No hables de pedidos, compras ni números de pedido si el cliente no los mencionó.
   · NO inventes políticas: IVA, costo o tiempo de envío, garantía, diferidos, tiempos de reparación y stock de lo que no está en el catálogo los confirma un asesor. Sí se hacen envíos a otras ciudades de Ecuador (el costo lo confirma el equipo).
@@ -153,7 +153,8 @@ export function answerPricesAreReal(answer: string, catalog: BotProduct[]) {
 export const aiExtract: Extractor = async (message, context) => {
   const fallback = await heuristicExtract(message, context);
   const parsed = await geminiJson<any>({
-    system: `${PROMPT}\n\nCATÁLOGO:\n${catalogForPrompt(context.catalog)}`,
+    // Las sucursales se editan en el panel: se ponen en cada llamada, no al cargar el modulo.
+    system: `${PROMPT.replace("{{STORE}}", storeFactsForPrompt())}\n\nCATÁLOGO:\n${catalogForPrompt(context.catalog)}`,
     text: [
       // Sin la fecha la IA decia "hoy domingo" un sabado (chats reales 9 y 10 oct).
       `Hoy es: ${new Intl.DateTimeFormat("es-EC", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", timeZone: "America/Guayaquil" }).format(new Date())} (hora de Ecuador)`,

@@ -4,7 +4,7 @@ import { DEVICES, ServiceEstimate, detectDevice, deviceEmoji, deviceLabel, estim
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
 import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, coordinatesVisit, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash, asksContactNumber, looksEnglish } from "./intents";
-import { STORE, storeInfoText } from "./store";
+import { storeHoursText, storeInfoText } from "./store";
 import { slugify } from "../../utils/slugify";
 
 /**
@@ -1001,7 +1001,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
 
   // Donde queda la tienda y horarios (datos fijos, la IA no los inventa).
   if (asksStoreInfo(message) && state.stage !== "address") {
-    const text = asksOnlyHours(message) ? `🕒 Nuestros horarios:\n${STORE.hours.map((line) => `• ${line}`).join("\n")}` : storeInfoText();
+    const text = asksOnlyHours(message) ? storeHoursText() : storeInfoText();
     // En medio de una solicitud de servicio: se da la direccion y se sigue con lo que faltaba.
     if (isTicketStage(state.stage)) return askTicketNext(state, deps, "R8:tienda", text);
     return withPending(state, deps, text, "R8:tienda");

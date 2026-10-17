@@ -184,11 +184,11 @@ Endpoints extra disponibles: `/search-order`, `/media` (alias `/transfer-receipt
 ## Menú principal y aviso del asesor
 
 El saludo muestra un menú numerado: *1* Impresoras · *2* Laptops y computadoras · *3* Monitores · *4* Cámaras ·
-*5* Servicio técnico · *6* Suministros · *7* Catálogo · *8* Hablar con un asesor. Con el menú a la vista, el número
+*5* Servicio técnico · *6* Suministros · *7* Cotización de repuestos (ticket con la etiqueta automática *Cotización de repuestos*) · *8* Catálogo · *9* Hablar con un asesor. Con el menú a la vista, el número
 elige (las categorías muestran los productos de menor a mayor precio); "menú" lo vuelve a mostrar. El cliente
 también puede escribir lo que busca o mandar una foto.
 
-Cuando un cliente pasa a un asesor (opción 8, "asesor", ticket creado, seguimiento de un caso), además de la alerta
+Cuando un cliente pasa a un asesor (opción 9, "asesor", ticket creado, seguimiento de un caso), además de la alerta
 del panel sale un **correo inmediato** a `HANDOFF_EMAIL` (separados por coma; si no está, a team@megaprinter.ec +
 `EMAIL_TO`) con el link `wa.me` del cliente y los últimos 10 mensajes. No se repite si ya se avisó en los últimos 30 min.
 

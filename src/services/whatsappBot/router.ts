@@ -254,6 +254,8 @@ export const MENU = [
   { key: "camaras", label: "📹 Cámaras de seguridad", categories: /camara/ },
   { key: "servicio", label: "🛠️ Servicio técnico" },
   { key: "suministros", label: "🧴 Suministros (tintas, tóner, repuestos)" },
+  // Pedido del cliente (17-oct): cotizar solo la pieza; el ticket sale con la etiqueta "Cotización de repuestos".
+  { key: "repuestos", label: "🔧 Cotización de repuestos" },
   { key: "catalogo", label: "📚 Ver el catálogo completo" },
   { key: "asesor", label: "🙋 Hablar con un asesor" },
 ] as const;
@@ -471,7 +473,7 @@ export const casualMarks = (text: string) => text.replace(/[¿¡]/g, "");
 function reply(state: BotState, rawText: string, decision: string, extra: Partial<TurnResult> = {}): TurnResult {
   const text = casualMarks(rawText);
   state.lastQuestion = text.slice(-300);
-  // Con el menu a la vista, "1"…"8" elige una opcion del menu.
+  // Con el menu a la vista, "1"…"9" elige una opcion del menu.
   state.menuShown = text.includes(MENU_LIST);
   // "Quieres que te pase con un asesor?" -> el "sí" siguiente lo acepta.
   state.offeredHuman = extra.route !== "human" && /(asesor|una persona|un humano|te (conecto|paso))[^?]*\?\s*\S{0,6}\s*$/i.test(text);
@@ -796,7 +798,9 @@ async function askTicketNext(state: BotState, deps: BotDeps, decision: string, p
     return reply(
       state,
       join(
-        state.ticket.type === "suministros"
+        state.ticket.tag === PARTS_TAG && !state.ticket.issue
+          ? "Qué repuesto necesitas? 🔧 Cuéntame la pieza (pantalla, batería, teclado, cargador, cabezal…) y la marca y modelo de tu equipo. Si quieres, mándame una foto 📸"
+          : state.ticket.type === "suministros"
           ? "Qué suministro necesitas? 🧴 Cuéntame la marca y el modelo de tu impresora y qué buscas (tinta, tóner, cartucho, papel)"
           : `Cuéntame más o menos qué problema tiene tu ${deviceLabel(state.ticket.device).toLowerCase()} 📝 (por ejemplo: ${ISSUE_EXAMPLES[state.ticket.device] || "no enciende, falla al usarlo"})`,
       ),
@@ -1053,8 +1057,8 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   const menuShown = state.menuShown;
   state.menuShown = false;
 
-  // Menu principal: "1"…"8" con el menu a la vista, o "menú" para verlo.
-  // Un numero suelto sin lista a la vista tambien es del menu ("8" para el asesor, chat real).
+  // Menu principal: "1"…"9" con el menu a la vista, o "menú" para verlo.
+  // Un numero suelto sin lista a la vista tambien es del menu ("9" para el asesor).
   const bareNumber = state.stage === "idle" && !state.cart.length && /^\d$/.test(message.trim());
   const menuChoice = (menuShown || bareNumber) && !state.options.length ? extractChoice(message, MENU.length) : null;
   if (menuChoice) {
@@ -1066,6 +1070,11 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     if (item.key === "suministros") {
       const inks = await offerInks(state, deps, "", "R10:menu_tintas");
       if (inks) return inks;
+    }
+    if (item.key === "repuestos") {
+      startTicket(state, "suministros", "");
+      state.ticket.tag = PARTS_TAG;
+      return askTicketNext(state, deps, "R10:menu_repuestos", "Claro! Te cotizamos el repuesto 🔧");
     }
     if (item.key === "servicio" || item.key === "suministros") {
       startTicket(state, item.key === "servicio" ? "servicio_tecnico" : "suministros", "");
@@ -1597,7 +1606,7 @@ export function decideRoute(
   if (asksIfBot(message) && /\b(atender(me)?|atienda|quiero hablar|necesito hablar|prefiero (hablar|una persona)|pasame|paseme|comunicar(me)?)\b/.test(normalize(message))) return { route: "human", reason: "pregunta si es un bot y pide persona" };
   if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
-  // Menu principal: 8 = asesor, 7 = catalogo.
+  // Menu principal: 9 = asesor, 8 = catalogo.
   const menuChoice = state.menuShown && !state.options.length ? extractChoice(message, MENU.length) : null;
   if (menuChoice && MENU[menuChoice - 1].key === "asesor") return { route: "human", reason: "menu: asesor" };
   if (menuChoice && MENU[menuChoice - 1].key === "catalogo") return { route: "catalog", reason: "menu: catalogo" };

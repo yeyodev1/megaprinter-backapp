@@ -817,7 +817,7 @@ async function main() {
     assert.equal((await one("Hace 3 meses compramos una impresora XP 5200 pero hace 2 semanas ha tenido problemas para imprimir los colores y salen distorsionados")).decision, "R10:servicio_tecnico");
     assert.equal((await one("Ya sería para ir en 1 hora a realizar la comprar")).decision, "R2:coordinar_visita");
     assert.equal((await one("Envié dirección")).decision, "R2:coordinar_visita");
-    const bare = await conversation(fakeDeps(), ["hola", "4", "8"]);
+    const bare = await conversation(fakeDeps(), ["hola", "4", "9"]);
     assert.equal(bare[2].decision, "R2:menu_asesor", "un número suelto es del menú");
     assert.equal(cleanAnswer("Qué chévere, Melanie! Te confirmo que todos nuestros precios ya incluyen IVA."), "Te confirmo que todos nuestros precios ya incluyen IVA.");
   });
@@ -900,7 +900,7 @@ async function main() {
 
   await test("menú numerado: el saludo muestra opciones y cada número lleva a su lugar", async () => {
     const [hello] = await conversation(fakeDeps(), ["hola"]);
-    assert.match(hello.reply, /\*1\.\* 🖨️ Impresoras[\s\S]*\*5\.\* 🛠️ Servicio técnico[\s\S]*\*8\.\* 🙋 Hablar con un asesor/);
+    assert.match(hello.reply, /\*1\.\* 🖨️ Impresoras[\s\S]*\*5\.\* 🛠️ Servicio técnico[\s\S]*\*7\.\* 🔧 Cotización de repuestos[\s\S]*\*9\.\* 🙋 Hablar con un asesor/);
     assert.equal(hello.state.menuShown, true);
     const printers = await conversation(fakeDeps(), ["hola", "1", "1"]);
     assert.equal(printers[1].decision, "R5:menu_impresoras");
@@ -909,11 +909,19 @@ async function main() {
     assert.match(laptops.reply, /HP 15[\s\S]*Dell/);
     const service = (await conversation(fakeDeps(), ["hola", "5"]))[1];
     assert.equal(service.step, "ticket_device");
-    const human = (await conversation(fakeDeps(), ["hola", "8"]))[1];
+    const human = (await conversation(fakeDeps(), ["hola", "9"]))[1];
     assert.equal(human.route, "human");
     assert.equal(human.notifyTeam, true, "avisa al equipo");
-    assert.equal(decideRoute(hello.state, { message: "8" }, { bank: true, cardEnabled: true }).route, "human");
-    assert.equal(decideRoute(hello.state, { message: "7" }, { bank: true, cardEnabled: true }).route, "catalog");
+    assert.equal(decideRoute(hello.state, { message: "9" }, { bank: true, cardEnabled: true }).route, "human");
+    assert.equal(decideRoute(hello.state, { message: "8" }, { bank: true, cardEnabled: true }).route, "catalog");
+    assert.equal(decideRoute(hello.state, { message: "7" }, { bank: true, cardEnabled: true }).route, "conversation");
+    const parts = fakeDeps();
+    const quote = await conversation(parts, ["hola", "7", "pantalla para laptop Dell Inspiron 15", "Ramiro Cevallos", "sí"]);
+    assert.equal(quote[1].decision, "R10:menu_repuestos");
+    assert.match(quote[1].reply, /Qué repuesto necesitas/);
+    assert.match(quote[3].reply, /Cotización de repuestos[\s\S]*pantalla para laptop Dell Inspiron 15/);
+    assert.equal(quote[4].decision, "R10:ticket_creado");
+    assert.deepEqual(parts.tickets[0].tags, ["Cotización de repuestos"], "la opción 7 etiqueta el ticket");
     const again = await conversation(fakeDeps(), ["asesor", "asesor"]);
     assert.equal(again[1].decision, "R2:esperando_asesor", "en traspaso no repite el aviso");
     assert.ok(!again[1].notifyTeam, "no repite el correo en 30 min");
@@ -1044,7 +1052,7 @@ async function main() {
     const midTicket = await conversation(fakeDeps(), ["mi laptop no prende", "Dirección del local"]);
     assert.equal(midTicket[1].decision, "R8:tienda");
     assert.match(midTicket[1].reply, /maps\.app\.goo\.gl[\s\S]*nombre/, "da la dirección y sigue con el ticket");
-    const [catalog] = await conversation(fakeDeps(), ["hola", "7"]).then((r) => r.slice(1));
+    const [catalog] = await conversation(fakeDeps(), ["hola", "8"]).then((r) => r.slice(1));
     assert.match(catalog.reply, /Catálogo completo[\s\S]*\/products/);
   });
 

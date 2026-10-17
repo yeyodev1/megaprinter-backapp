@@ -78,6 +78,10 @@ export interface BotState {
   menuShown: boolean;
   /** Lista que salio de una foto del cliente: si elige, la vista aprende que acerto. */
   photoMatchId?: string;
+  /** Cuando se mostro la ultima lista (ISO): una lista vieja no traba el chat. */
+  optionsAt?: string;
+  /** Ultima foto que mando y lo que se vio: "quiero ese producto" la busca en el catalogo. */
+  lastImage?: { description: string; searchQuery: string; at: string };
 }
 
 export const createInitialState = (): BotState => ({
@@ -102,6 +106,14 @@ export const createInitialState = (): BotState => ({
 
 const HANDOFF_MS = 60 * 60 * 1000;
 const GREETING_MS = 12 * 60 * 60 * 1000;
+/** Una lista de opciones de hace mas de 2 h ya no esta "a la vista" (chat real 17-oct: pidio un numero sin lista). */
+const OPTIONS_MS = 2 * 60 * 60 * 1000;
+/** "Quiero ese producto" se refiere a la ultima foto durante 30 min. */
+const LAST_IMAGE_MS = 30 * 60 * 1000;
+/** Equipos que vende la tienda: si la IA los ve, es un producto aunque la foto sea "otra cosa". */
+const STORE_ITEMS = /\b(laptops?|portatil|notebook|computadora|pc|all in one|impresoras?|multifuncional|monitor(es)?|camaras?|tintas?|toner|macbook|tablet)\b/;
+/** "Quiero ese producto", "cuál hay", "tienen de esos", "uno así": habla de la foto que acaba de mandar. */
+const REFERS_TO_IMAGE = /\b(ese|esa|este|esta|estos|estas|esos|esas|eso|esto)( producto| modelo| equipo| laptop| impresora| monitor)?\b|\b(cual(es)? hay|tienen|hay (de )?(esos|esas|eso)|uno asi|una asi|igual(es)?|parecid\w*|de la (foto|imagen)|lo tienen|la tienen|otra de estas|otro de estos)\b/;
 const within = (iso: string, ms: number) => Boolean(iso) && Date.now() - Date.parse(iso) < ms;
 
 /** Intencion para las Rules de BuilderBot. */
@@ -555,6 +567,7 @@ export function whatsappImageUrl(url: string) {
 function showOptions(state: BotState, products: BotProduct[], decision: string, intro?: string, outro = "", keepTicket = false): TurnResult {
   state.options = products.map(toOption);
   state.stage = "choosing";
+  state.optionsAt = new Date().toISOString();
   // Solo la lista de tintas guarda la solicitud de suministros (para "cotizar" otra).
   if (!keepTicket) state.ticket = createInitialState().ticket;
   // El catalogo completo es una opcion mas de la lista.
@@ -956,6 +969,15 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   const state: BotState = JSON.parse(JSON.stringify({ ...createInitialState(), ...previous }));
   const message = input.message.trim();
 
+  // Lista vieja (o sin fecha, de antes de este cambio): ya no esta a la vista, no se pide "el numero de la opcion".
+  // Sin fecha (sesiones de antes): sigue a la vista solo si el ultimo mensaje de Mila mostraba la lista numerada.
+  const listGone = state.optionsAt ? !within(state.optionsAt, OPTIONS_MS) : !/\*\d+\.\*/.test(state.lastQuestion || "");
+  if (state.stage === "choosing" && listGone) {
+    state.options = [];
+    state.stage = state.cart.length ? missingStage(state, deps) : "idle";
+    delete state.photoMatchId;
+  }
+
   // R1: comprobante de transferencia (imagen o PDF).
   if (input.mediaUrl) {
     const outcome = await deps.receiveReceipt(state.orderId, input.mediaUrl);
@@ -997,6 +1019,12 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
         : "Recibí tu foto 📎 El técnico la revisa junto con tu solicitud.";
       return askTicketNext(state, deps, "R1:foto_del_ticket", intro);
     }
+    if (outcome.status === "image") state.lastImage = { description: outcome.description, searchQuery: outcome.searchQuery, at: new Date().toISOString() };
+    // La IA dijo "otra cosa" pero nombra un equipo que vendemos (laptop en uso, impresora en una oficina): se busca igual.
+    if (outcome.status === "image" && outcome.kind === "other" && STORE_ITEMS.test(normalize(outcome.description))) {
+      const similar = searchProducts(await deps.loadCatalog(), outcome.searchQuery || outcome.description, 3);
+      if (similar.length) return showOptions(state, similar, "R1:foto_producto_parecido", `Veo ${outcome.description} 👀 Estos son los más parecidos que tenemos:`);
+    }
     if (outcome.status === "image" && outcome.kind === "product") {
       const catalog = await deps.loadCatalog();
       const byId = new Map(catalog.map((product) => [product.id, product]));
@@ -1025,7 +1053,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
         : "";
       return reply(
         state,
-        `Recibí tu imagen (${outcome.description}) 📎 Cuéntame qué necesitas con ella: si buscas ese producto, te digo si lo tenemos; si es sobre un equipo en servicio técnico o un pago, escribe *asesor* y te atiende una persona 🙌${pending}`,
+        `Recibí tu imagen 📎 Veo ${outcome.description || "algo que no reconozco bien"}. Cuéntame qué necesitas con ella: si buscas ese producto, te digo si lo tenemos; si es sobre un equipo en servicio técnico o un pago, escribe *asesor* y te atiende una persona 🙌${pending}`,
         "R1:imagen",
       );
     }
@@ -1158,6 +1186,14 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     return toHuman(state, "Perfecto! 🙌 Le aviso al equipo para que te atienda y coordine contigo. En breve te escriben por aquí 💙", "R2:coordinar_visita");
   }
   // "me quedo con la opcion 1" sin opciones en este chat: se las dio un asesor.
+  // "Quiero ese producto" / "cuál hay" despues de una foto: se busca lo que se vio en ella.
+  if (state.lastImage && within(state.lastImage.at, LAST_IMAGE_MS) && !state.options.length && !isTicketStage(state.stage) && REFERS_TO_IMAGE.test(normalize(message))) {
+    const seen = state.lastImage;
+    delete state.lastImage;
+    const found = searchProducts(await deps.loadCatalog(), seen.searchQuery || seen.description, 3);
+    if (found.length) return showOptions(state, found, "R1:foto_referida", `Claro! Por lo que vi en tu foto (${seen.description}), estos son los que tenemos 👇`);
+    return toHuman(state, `Ese equipo (${seen.description}) no lo tengo en el catálogo ahora mismo 🙈 Te paso con un asesor para ver si lo conseguimos 🙌`, "R2:foto_sin_stock");
+  }
   if (refersToOption(message) && !state.options.length) {
     return toHuman(state, "Te paso con la persona del equipo que te mostró esas opciones para cerrar tu compra 🙌 En breve te escribe por aquí 💙", "R2:opcion_de_asesor");
   }

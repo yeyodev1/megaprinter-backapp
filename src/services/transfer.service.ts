@@ -304,7 +304,7 @@ export interface ImageInsight {
 const IMAGE_PROMPT = `Eres el asistente de Megaprinter (tienda de tecnología en Ecuador: laptops, all in one, monitores, impresoras, cámaras de seguridad). Un cliente mandó esta imagen por WhatsApp. Puede ser una foto, una captura de Instagram (de Megaprinter o de otra tienda), una publicidad o un comprobante bancario.
 Devuelve SOLO JSON: {"kind":"receipt|product|other","description":"","searchQuery":"","matches":[0],"exactMatch":false}
 - kind "receipt": comprobante de transferencia, depósito o pago bancario, o captura de un pago con tarjeta aprobado (Payphone, voucher, "pago exitoso").
-- kind "product": muestra un equipo de tecnología o una publicación/anuncio de uno (lee el texto de la imagen: marca, modelo, specs, precio).
+- kind "product": muestra un equipo de tecnología o una publicación/anuncio de uno (lee el texto de la imagen: marca, modelo, specs, precio). También una foto real de un equipo en uso (laptop abierta y encendida, impresora en una oficina, monitor en un escritorio): el cliente casi siempre quiere uno igual.
 - kind "other": cualquier otra cosa.
 - description: frase corta en español de lo que se ve (ej. "una impresora Epson L3250 negra", "una publicación de Instagram de una laptop HP 15"). Si es una pieza o repuesto, dilo (ej. "una pantalla de laptop rota", "un cargador Lenovo 65W"). Si se ve una etiqueta, placa o pantalla con texto, copia marca, modelo y número de parte o serie tal cual (ej. "etiqueta de una laptop Dell Inspiron 15 3520, P/N 0X1Y2Z").
 - searchQuery: si es product, marca + tipo + modelo (ej. "impresora epson l3250"); si no, "".

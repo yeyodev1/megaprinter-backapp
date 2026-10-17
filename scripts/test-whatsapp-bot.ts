@@ -774,7 +774,7 @@ async function main() {
     assert.equal(doubt.at(-1)!.state.address, "", "una duda no es una dirección");
     const confirm = await conversation(fakeDeps(), ["monitor", "1", "Melanie P", "m@mail.com", "Manabí", "transferencia", "No me ha llegado la información"]);
     assert.notEqual(confirm.at(-1)!.decision, "R7:pedir_cambio");
-    const shown = { ...createInitialState(), stage: "choosing" as const, options: [{ productId: "p3", name: "Impresora Epson L3250 tinta continua WiFi", price: 229 }] };
+    const shown = { ...createInitialState(), stage: "choosing" as const, options: [{ productId: "p3", name: "Impresora Epson L3250 tinta continua WiFi", price: 229 }], lastQuestion: "*1.* Impresora Epson L3250 — *$229.00*\nCuál te agrego?" };
     const [epson] = await conversation(fakeDeps(), ["Epson"], shown);
     assert.equal(epson.state.cart[0]?.productId, "p3", "'Epson' elige la opción mostrada");
     const [option] = await conversation(fakeDeps(), ["Hola buenas noches por ahora me quedo con la opción 1 dígame para cuándo estaría Y a qué cuenta le puedo transferir gracias"]);
@@ -891,6 +891,34 @@ async function main() {
     assert.equal(turns[3].decision, "R10:ticket_detalle");
     assert.equal(fake.tickets[0].issue, "la pantalla. Foto: una laptop Lenovo IdeaPad Slim 3 gris");
     assert.deepEqual(fake.tickets[0].photos, ["https://res.cloudinary.com/x/l.jpg"]);
+  });
+
+  await test("chat real 17-oct: foto de una laptop en uso + 'Quiero ese producto' muestra las parecidas", async () => {
+    const laptopInUse = { status: "image", kind: "other", description: "una laptop gris abierta y encendida sobre un soporte", searchQuery: "laptop", productIds: [], exactMatch: false } as const;
+    const [photo] = await conversation(fakeDeps({ receipt: laptopInUse as any }), [{ media: "https://x.test/l.jpg" }]);
+    assert.equal(photo.decision, "R1:foto_producto_parecido", "una laptop en uso es un producto aunque la IA diga 'otra cosa'");
+    assert.match(photo.reply, /Laptop HP 15/);
+
+    const unclear = { status: "image", kind: "other", description: "un equipo gris sobre una mesa", searchQuery: "", productIds: [], exactMatch: false } as const;
+    const fake = fakeDeps({ receipt: unclear as any });
+    const turns = await conversation(fake, [{ media: "https://x.test/l.jpg" }, "Quiero ese producto"]);
+    assert.equal(turns[0].decision, "R1:imagen");
+    assert.match(turns[0].reply, /Veo un equipo gris sobre una mesa/);
+    assert.notEqual(turns[1].decision, "R9:eleccion_no_entendida", "no pide un número sin lista");
+    assert.equal(turns[1].decision, "R2:foto_sin_stock");
+
+    const later = { status: "image", kind: "other", description: "una impresora epson sobre un escritorio", searchQuery: "", productIds: [], exactMatch: false } as const;
+    const [, asked] = await conversation(fakeDeps({ receipt: { ...later, description: "algo borroso" } as any }), [{ media: "https://x.test/p.jpg" }, "cuál hay"]);
+    assert.equal(asked.decision, "R2:foto_sin_stock");
+
+    // Lista de hace 3 horas: ya no traba el chat.
+    const stale = { ...createInitialState(), stage: "choosing" as const, options: [{ productId: "p1", name: "Laptop HP 15", price: 649 }], optionsAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() };
+    const [fresh] = await conversation(fakeDeps(), ["impresora epson"], stale);
+    assert.notEqual(fresh.decision, "R9:eleccion_no_entendida");
+    // Sesion vieja sin fecha cuyo ultimo mensaje no tenia lista (el chat real): tampoco pide un numero.
+    const oldSession = { ...createInitialState(), stage: "choosing" as const, options: [{ productId: "p1", name: "Laptop HP 15", price: 649 }], lastQuestion: "Recibí tu imagen 📎 Cuéntame qué necesitas" };
+    const [noTrap] = await conversation(fakeDeps(), ["Quiero ese producto"], oldSession);
+    assert.notEqual(noTrap.decision, "R9:eleccion_no_entendida");
   });
 
   await test("personalidad: lo que pide el equipo entra al prompt y las frases prohibidas se detectan", async () => {

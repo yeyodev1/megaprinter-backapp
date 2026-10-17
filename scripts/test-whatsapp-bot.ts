@@ -10,7 +10,7 @@ import { aiExtract, cleanAnswer, heuristicExtract, answerPricesAreReal } from ".
 import * as gemini from "../src/services/gemini.service";
 import axios from "axios";
 import { decideFromSale, paymentAttempts, settleCardPayment } from "../src/services/payphone.service";
-import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
+import { applyTeamRules, keepsData, naturalize } from "../src/services/whatsappBot/voice";
 import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn, asksPartsQuote, inferDevice, partRequest, whatsappImageUrl } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164, withImages } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
@@ -653,6 +653,34 @@ async function main() {
       const turn = await handleTurn(state, { message: "si" }, fake.deps);
       assert.equal(turn.route, expected);
       assert.equal(turn.intent, "orden_creada");
+    }
+  });
+
+  await test("reglas del equipo (Selena 17-oct): sin servicio ni repuestos para Mac, aunque la respuesta sea fija", async () => {
+    const persona = { personality: "amable al decir que no contamos con algo", alwaysSay: ["cuando pregunten por servicio técnico de Mac o repuestos indicarle que no brindamos ese servicio para esta marca"], neverSay: [] };
+    const draft = "Sí! Te cotizamos repuestos para tu Mac 🔧 Qué pieza necesitas?";
+    const original = gemini.geminiJson;
+    try {
+      let prompt = "";
+      (gemini as any).geminiJson = async (request: any) => {
+        prompt = `${request.system}\n${request.text}`;
+        return { cumple: false, message: "Uy, qué pena 🙏 Para Mac no brindamos servicio técnico ni repuestos. Si necesitas algo para otra marca o buscas un equipo nuevo, aquí estoy!", terminaFlujo: true };
+      };
+      const checked = await applyTeamRules(draft, "Tienen respuesta de Mac? Conf", "", persona);
+      assert.equal(checked.ok, false);
+      assert.equal(checked.endFlow, true);
+      assert.match(checked.message, /Para Mac no brindamos/);
+      assert.match(prompt, /no brindamos ese servicio para esta marca[\s\S]*Tienen respuesta de Mac/, "la IA ve la regla y el mensaje del cliente");
+      (gemini as any).geminiJson = async () => ({ cumple: true });
+      assert.equal((await applyTeamRules("Hola!", "hola", "", persona)).ok, true);
+      (gemini as any).geminiJson = async () => null;
+      assert.equal((await applyTeamRules(draft, "x", "", persona)).message, draft, "IA caída: sale la respuesta original");
+      let called = false;
+      (gemini as any).geminiJson = async () => ((called = true), { cumple: false, message: "otra cosa distinta" });
+      await applyTeamRules(draft, "x", "", { personality: "", alwaysSay: [], neverSay: [] });
+      assert.equal(called, false, "sin reglas no se llama a la IA");
+    } finally {
+      (gemini as any).geminiJson = original;
     }
   });
 

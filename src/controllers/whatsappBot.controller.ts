@@ -14,7 +14,7 @@ import { ServiceTicketModel } from "../models/serviceTicket.model";
 import { createAlert } from "../services/alerts.service";
 import { escapeHtml, sendEmail, storeRecipients } from "../services/email.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
-import { naturalize } from "../services/whatsappBot/voice";
+import { applyTeamRules, naturalize } from "../services/whatsappBot/voice";
 import { sendProductPhotos } from "../services/whatsappBot/photos";
 import { waitUntil } from "@vercel/functions";
 import { learnFromChat } from "../services/botLearning.service";
@@ -534,13 +534,26 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
       if (result.state.photoMatchId === previous.photoMatchId && (chosen || result.state.stage !== "choosing")) delete result.state.photoMatchId;
     }
 
-    // Voz de Mila con IA: el mismo contenido, dicho distinto cada vez (sin repetir
-    // sus ultimos mensajes). Con BOT_AI_VOICE=off se envia la plantilla tal cual.
-    // El saludo y el menu van tal cual (texto acordado con el cliente): la IA les
-    // metia "qué chévere verte por aquí" y ejemplos que el cliente no pidio.
-    if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && !/^R9:(saludo|menu)|^R1:(foto|imagen)|^R8:(tienda|catalogo)|^R5:(menu_catalogo|catalogo_completo)|^R10:|^R2:/.test(result.decision)) {
+    // Reglas del equipo (panel → Personalidad): si la respuesta las contradice, la IA la corrige.
+    // Pasa por TODAS las respuestas, tambien las fijas (servicio, repuestos, menu): antes no las veian (Selena, 17-oct).
+    const ruled = geminiEnabled() && !result.decision.startsWith("R0:") ? await applyTeamRules(result.reply, message, recent, await loadPersona()) : null;
+    if (ruled && !ruled.ok) {
+      result.reply = ruled.message;
+      result.decision = `${result.decision}|regla_equipo`;
+      if (ruled.endFlow) {
+        // Lo que se iba a abrir (ticket, cotizacion, lista) ya no aplica.
+        const checkout = ["name", "email", "address", "payment", "bank", "confirm"];
+        result.state.stage = result.state.cart.length && checkout.includes(previous.stage) ? previous.stage : "idle";
+        result.state.ticket = createInitialState().ticket;
+        result.state.options = [];
+        result.images = [];
+        result.step = result.state.stage;
+      }
+    } else if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && !/^R9:(saludo|menu)|^R1:(foto|imagen)|^R8:(tienda|catalogo)|^R5:(menu_catalogo|catalogo_completo)|^R10:ticket_(nombre|creado|sin_nombre|mas_detalle)|^R2:/.test(result.decision) && !result.reply.includes("🧾")) {
+      // Voz de Mila con IA: conversa con lo que dijo el cliente, sin repetir sus ultimos mensajes.
+      // Los resumenes con datos (🧾), el saludo y el menu acordados con el cliente van tal cual.
       const lastBotMessages = history.filter((entry: any) => entry.role === "assistant").slice(-3).map((entry: any) => String(entry.content));
-      result.reply = await naturalize(result.reply, lastBotMessages);
+      result.reply = await naturalize(result.reply, lastBotMessages, message);
     }
 
     // El cliente repite lo mismo que en su mensaje anterior: Mila no le contesto lo que pedia (dispara el aprendizaje).

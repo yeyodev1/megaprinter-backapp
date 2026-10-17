@@ -140,6 +140,13 @@ como link dentro de `message` (nodos HTTP con `split` e `interpretLinks` activos
   con lo que propuso la IA. Si el cliente elige un producto de esa lista → *confirmada*; si el equipo dice en el panel
   cuál era (o que no está en el catálogo) → *corregida*. Las últimas 40 van como ejemplos al analizar la siguiente foto,
   incluyendo lo que NO era.
+- **Reglas del equipo en TODAS las respuestas:** antes de enviar, si hay personalidad/siempre/nunca cargados, Gemini
+  revisa la respuesta contra el mensaje del cliente y esas reglas (`applyTeamRules`). Si choca, la reescribe y, si
+  abría un trámite que ya no aplica (ticket, cotización, lista), lo cierra (`decision` termina en `|regla_equipo`).
+  Antes las respuestas fijas (servicio, repuestos, menú) no veían las reglas (Selena, 17-oct: "no damos servicio a Mac").
+  Ver lo cargado: `pnpm bot:rules`.
+- **Voz que conversa:** la voz recibe el mensaje del cliente y responde a eso; también en los pasos de servicio y
+  repuestos. Los resúmenes con datos (🧾), el saludo y el menú van tal cual.
 - **Personalidad (solo admin):** tono, "siempre" y "nunca" (`botpersonas`, `_id: "persona"`). Entra en el prompt del
   extractor y en el de la voz; si la voz usa una frase prohibida entre comillas, se envía el texto original.
   Las reglas fijas (precios de reparación, Meta, pasos del pedido) siguen mandando.

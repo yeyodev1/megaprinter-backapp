@@ -14,6 +14,7 @@
     "user:create": "ts-node-dev --transpile-only scripts/create-user.ts",
     "test:bot": "ts-node-dev --transpile-only scripts/test-whatsapp-bot.ts",
     "bot:logs": "ts-node-dev --transpile-only scripts/bot-logs.ts",
+    "bot:rules": "ts-node-dev --transpile-only scripts/bot-rules.ts",
     "report:attention": "ts-node-dev --transpile-only scripts/attention-report.ts",
     "bot:learn": "ts-node-dev --transpile-only scripts/bot-learning.ts"
   },

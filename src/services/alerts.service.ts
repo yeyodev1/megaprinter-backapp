@@ -1,6 +1,6 @@
 import { AlertModel } from "../models/alert.model";
 
-type AlertType = "order_new" | "payment_confirmed" | "receipt_review" | "ticket_new" | "human_handoff" | "email_failed";
+type AlertType = "order_new" | "payment_confirmed" | "receipt_review" | "ticket_new" | "human_handoff" | "warranty_canon" | "email_failed";
 
 /** Crea una alerta del panel. Nunca lanza ni bloquea. */
 export function createAlert(type: AlertType, title: string, body = "", link = "") {

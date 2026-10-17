@@ -177,3 +177,14 @@ export const asksContactNumber = (text: string) =>
 /** Escribe en ingles (proveedores, spam): el bot solo atiende en espanol, pasa a una persona. */
 export const looksEnglish = (text: string) =>
   normalize(text).split(" ").filter((word) => /^(the|and|your|you|with|would|like|company|our|we|are|is|from|which|good|day|how|please|send|more|details|interested|cooperation)$/.test(word)).length >= 3;
+
+/**
+ * Garantia de una Canon ("garantía canon", "registrar mi impresora canon", "garantía de mi PIXMA G3110"):
+ * se manda el formulario oficial de Canon y se avisa en el panel (pedido del cliente, 17-oct).
+ */
+export const asksCanonWarranty = (text: string) => {
+  const value = normalize(text);
+  const canon = /\b(canon|pixma|serie g|g ?(1|2|3|4|5|6|7)\d{2,3})\b/.test(value);
+  const warranty = /\b(garant\w*|registr\w* (la |mi |el )?(impresora|equipo|producto|compra)|encuesta)\b/.test(value);
+  return canon && warranty;
+};

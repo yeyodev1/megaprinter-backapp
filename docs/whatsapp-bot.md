@@ -228,6 +228,14 @@ la etiqueta) y Mila responde "Recibí tu foto 📎 Veo …". Lo que ve entra al 
 problema, la foto ya es la respuesta. La copia en Cloudinary (`megaprinter/customer-photos`) queda en `ticket.photos`,
 en el correo al equipo y en el detalle del ticket del panel.
 
+## Garantía Canon
+
+"garantía canon", "registrar mi impresora Canon", "garantía de mi PIXMA G3110" (garantía/registro/encuesta + Canon,
+PIXMA o un modelo G) → Mila manda el formulario oficial de Canon (PIXMA serie G, Bolivia y Ecuador,
+`CANON_WARRANTY_URL` en router.ts) y crea la alerta **warranty_canon** en la campana del panel con el teléfono y el
+mensaje. `/brain` lo manda a Conversación (no al asesor) y el texto va tal cual (`R11:`, sin voz ni reglas, para no
+tocar el link). Garantía de otras marcas sigue yendo a un asesor.
+
 ## Variables de entorno
 
 | Variable | Para qué |

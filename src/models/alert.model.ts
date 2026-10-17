@@ -7,6 +7,7 @@ export const ALERT_TYPES = [
   "receipt_review", // comprobante de transferencia por revisar
   "ticket_new", // ticket de servicio tecnico o suministros
   "human_handoff", // un cliente pidio hablar con una persona
+  "warranty_canon", // pidio la garantia de una Canon: se le mando el formulario de Canon
   "email_failed", // un correo no se pudo enviar
 ] as const;
 

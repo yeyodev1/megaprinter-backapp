@@ -965,6 +965,19 @@ async function main() {
     assert.equal(cleanAnswer("Los tres modelos están disponibles para entrega inmediata. Te muestro las opciones 😊"), "Te muestro las opciones 😊");
   });
 
+  await test("garantía Canon (17-oct): manda el formulario oficial y avisa en el panel", async () => {
+    const url = "https://encuestaclacanon.com/encuesta-canon-latin-america-group-bolivia-y-ecuador/pixma-serie-g-bolivia-y-ecuador/encuesta-pixma-serie-g-bolivia-y-ecuador/";
+    for (const text of ["garantia canon", "Hola, cómo registro la garantía de mi impresora Canon G3110?", "garantía de mi pixma", "quiero registrar mi impresora canon"]) {
+      const [turn] = await conversation(fakeDeps(), [text]);
+      assert.equal(turn.decision, "R11:garantia_canon", text);
+      assert.ok(turn.reply.includes(url), "el link va completo");
+      assert.equal(turn.alert?.type, "warranty_canon");
+      assert.equal(decideRoute(createInitialState(), { message: text }, { bank: true, cardEnabled: true }).route, "conversation", "no salta al asesor");
+    }
+    const [other] = await conversation(fakeDeps(), ["garantía de mi laptop hp"]);
+    assert.notEqual(other.decision, "R11:garantia_canon", "otra marca sigue su camino");
+  });
+
   await test("personalidad: lo que pide el equipo entra al prompt y las frases prohibidas se detectan", async () => {
     assert.equal(personaForPrompt({ personality: "", alwaysSay: [], neverSay: [] }), "");
     const block = personaForPrompt({ personality: "Seria pero cálida", alwaysSay: ["Ofrece el retiro en tienda"], neverSay: ['Nunca digas "mi amor"'] });

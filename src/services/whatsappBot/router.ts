@@ -3,7 +3,7 @@ import { detectBank } from "../banks";
 import { DEVICES, ServiceEstimate, detectDevice, deviceEmoji, deviceLabel, estimateService, priceText } from "./serviceCatalog";
 import { BotProduct, catalogOverview, money, normalize, productLine, searchProducts } from "./catalog";
 import { Extraction, Extractor } from "./extractor";
-import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, coordinatesVisit, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash, asksContactNumber, looksEnglish } from "./intents";
+import { detectPaymentMethod, extractChoice, extractEmail, isGreeting, isNo, isYes, orderNumberIn, wantsCancel, wantsCatalog, wantsHuman, wantsOptOut, wantsTracking, asksIfBot, claimsPaid, wantsService, wantsSupplies, PARTS, asksOnlyHours, asksServicePrice, asksStoreInfo, coordinatesVisit, followsUpCase, isAck, isHesitation, isShortNo, refersToOption, wantsCash, asksContactNumber, looksEnglish, asksCanonWarranty } from "./intents";
 import { storeHoursText, storeInfoText } from "./store";
 import { slugify } from "../../utils/slugify";
 
@@ -152,6 +152,8 @@ export interface TurnResult {
   notifyTeam?: boolean;
   /** Fotos de los productos que se muestran (el controlador las pone antes del texto). */
   images?: { url: string; caption: string }[];
+  /** Aviso para la campana del panel. */
+  alert?: { type: "warranty_canon"; title: string; body: string };
 }
 
 export interface TurnInput {
@@ -696,6 +698,10 @@ function describesProblem(message: string) {
 
 export const PARTS_TAG = "Cotización de repuestos";
 
+/** Formulario oficial de garantia de Canon (PIXMA serie G, Bolivia y Ecuador). */
+export const CANON_WARRANTY_URL =
+  "https://encuestaclacanon.com/encuesta-canon-latin-america-group-bolivia-y-ecuador/pixma-serie-g-bolivia-y-ecuador/encuesta-pixma-serie-g-bolivia-y-ecuador/";
+
 /** Piezas de laptop/PC que se cambian o se cotizan sueltas. */
 const SWAP_PARTS: Array<{ label: string; words: RegExp }> = [
   { label: "pantalla", words: /pantallas?|display|lcd|touch/ },
@@ -1191,6 +1197,21 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   }
 
   // R2: pedir una persona, o "sí" cuando el bot ofrecio un asesor.
+  // Garantia de una Canon: el formulario oficial de Canon y aviso en el panel (antes "garantía" pasaba directo a un asesor).
+  if (asksCanonWarranty(message)) {
+    if (isTicketStage(state.stage)) state.ticket = createInitialState().ticket;
+    state.stage = state.cart.length ? missingStage(state, deps) : "idle";
+    state.options = [];
+    return reply(
+      state,
+      `Claro! 🙌 Para activar la garantía de tu impresora Canon, regístrala en el formulario oficial de Canon aquí 👇\n${CANON_WARRANTY_URL}\n\nYa le avisé al equipo para que te acompañe con el proceso 💙 Si tu impresora tiene alguna falla, cuéntame qué le pasa y te ayudo 🛠️`,
+      "R11:garantia_canon",
+      {
+        intent: "dudas",
+        alert: { type: "warranty_canon", title: `🧾 Garantía Canon: ${state.customerName || "cliente de WhatsApp"}`, body: `Se le envió el formulario de garantía de Canon. Dijo: "${message.slice(0, 200)}"` },
+      },
+    );
+  }
   if (wantsHuman(message) || (offeredHuman && isYes(message))) {
     const contact = deps.supportPhone ? ` También puedes escribir directo al ${deps.supportPhone}.` : "";
     return toHuman(state, `Claro! Te paso con una persona real del equipo de Megaprinter 🙌💙 En un ratito te escribe por aquí.${contact}`, offeredHuman && !wantsHuman(message) ? "R2:acepta_asesor" : "R2:humano");
@@ -1714,6 +1735,8 @@ export function decideRoute(
   // Pero "eres IA? podría atenderme una persona?" si lo es.
   if (asksIfBot(message) && /\b(atender(me)?|atienda|quiero hablar|necesito hablar|prefiero (hablar|una persona)|pasame|paseme|comunicar(me)?)\b/.test(normalize(message))) return { route: "human", reason: "pregunta si es un bot y pide persona" };
   if (asksIfBot(message)) return { route: "conversation", reason: "pregunta si es un bot" };
+  // "garantía canon" lleva "garantía" (pide persona), pero se responde con el formulario de Canon.
+  if (asksCanonWarranty(message)) return { route: "conversation", reason: "garantía Canon" };
   if (wantsHuman(message)) return { route: "human", reason: "pide una persona" };
   // Menu principal: 9 = asesor, 8 = catalogo.
   const menuChoice = state.menuShown && !state.options.length ? extractChoice(message, MENU.length) : null;

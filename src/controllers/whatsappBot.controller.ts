@@ -536,7 +536,9 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
 
     // Reglas del equipo (panel → Personalidad): si la respuesta las contradice, la IA la corrige.
     // Pasa por TODAS las respuestas, tambien las fijas (servicio, repuestos, menu): antes no las veian (Selena, 17-oct).
-    const ruled = geminiEnabled() && !result.decision.startsWith("R0:") ? await applyTeamRules(result.reply, message, recent, await loadPersona()) : null;
+    // R11: textos con links oficiales (garantia Canon): van tal cual, ni reglas ni voz.
+    const fixedText = /^R(0|11):/.test(result.decision);
+    const ruled = geminiEnabled() && !fixedText ? await applyTeamRules(result.reply, message, recent, await loadPersona()) : null;
     if (ruled && !ruled.ok) {
       result.reply = ruled.message;
       result.decision = `${result.decision}|regla_equipo`;
@@ -549,7 +551,7 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
         result.images = [];
         result.step = result.state.stage;
       }
-    } else if (geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && !/^R9:(saludo|menu)|^R1:(foto|imagen)|^R8:(tienda|catalogo)|^R5:(menu_catalogo|catalogo_completo)|^R10:ticket_(nombre|creado|sin_nombre|mas_detalle)|^R2:/.test(result.decision) && !result.reply.includes("🧾")) {
+    } else if (!fixedText && geminiEnabled() && process.env.BOT_AI_VOICE !== "off" && !/^R9:(saludo|menu)|^R1:(foto|imagen)|^R8:(tienda|catalogo)|^R5:(menu_catalogo|catalogo_completo)|^R10:ticket_(nombre|creado|sin_nombre|mas_detalle)|^R2:/.test(result.decision) && !result.reply.includes("🧾")) {
       // Voz de Mila con IA: conversa con lo que dijo el cliente, sin repetir sus ultimos mensajes.
       // Los resumenes con datos (🧾), el saludo y el menu acordados con el cliente van tal cual.
       const lastBotMessages = history.filter((entry: any) => entry.role === "assistant").slice(-3).map((entry: any) => String(entry.content));
@@ -780,6 +782,9 @@ export async function whatsappBotTurn(req: Request, res: Response) {
           `Dijo: "${message.slice(0, 160)}". El bot quedó en silencio en ese chat.`,
           `/admin/bot?phone=${encodeURIComponent(phone)}`,
         );
+      }
+      if (result.alert && !(result as any).duplicated) {
+        createAlert(result.alert.type, result.alert.title, `${result.alert.body} · ${phone}`, `/admin/bot?phone=${encodeURIComponent(phone)}`);
       }
       // Correo inmediato a quien atiende (Marilexi) con el link del chat. Tambien con tickets.
       if (result.route === "human" && result.notifyTeam && !(result as any).duplicated) await notifyHandoff(phone, result, message);

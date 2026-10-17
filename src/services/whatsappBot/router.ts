@@ -727,8 +727,36 @@ export function partRequest(text: string) {
   return "";
 }
 
+/**
+ * Pide repuestos ("tienen repuestos de Mac?", "respuesta de Mac" por error de tipeo, "piezas para Lenovo").
+ * Va directo a la cotizacion de repuesto, sin la lista de equipos (chat real 17-oct).
+ */
+const BRAND_LABELS: Array<[RegExp, string]> = [
+  [/\b(mac|macbook|imac|apple)\b/, "Mac"],
+  [/\bdell\b/, "Dell"],
+  [/\blenovo\b/, "Lenovo"],
+  [/\basus\b/, "Asus"],
+  [/\bacer\b/, "Acer"],
+  [/\bhp\b/, "HP"],
+  [/\btoshiba\b/, "Toshiba"],
+  [/\bhuawei\b/, "Huawei"],
+  [/\bsamsung\b/, "Samsung"],
+  [/\bmsi\b/, "MSI"],
+  [/\bepson\b/, "Epson"],
+  [/\bcanon\b/, "Canon"],
+  [/\bbrother\b/, "Brother"],
+];
+export const brandIn = (text: string) => BRAND_LABELS.find(([pattern]) => pattern.test(normalize(text)))?.[1] || "";
+
+export function asksPartsQuote(text: string) {
+  const value = normalize(text);
+  if (/\b(repuestos?|piezas?|partes) (de|para|del)\b/.test(value) || /\b(cotiza\w* (un |el |de )?repuesto|venden repuestos|tienen repuestos)\b/.test(value)) return true;
+  // "respuesta de Mac": error de tipeo de "repuesto" (solo con marca o equipo despues).
+  return /\brespuestas? (de|para) (la |el |una |un |mi )?(mac|macbook|imac|apple|laptop|computadora|pc|impresora|dell|lenovo|asus|acer|hp|toshiba|huawei|samsung|msi|epson|canon|brother)\b/.test(value);
+}
+
 /** Marca de laptop + pieza de laptop: es una laptop aunque no lo diga ("pantalla de una Dell"). */
-const LAPTOP_BRANDS = /\b(dell|lenovo|asus|acer|toshiba|hp|huawei|msi|macbook|apple|samsung|vaio|thinkpad|ideapad|vivobook|inspiron|latitude|pavilion|aspire)\b/;
+const LAPTOP_BRANDS = /\b(dell|lenovo|asus|acer|toshiba|hp|huawei|msi|macbook|mac|apple|samsung|vaio|thinkpad|ideapad|vivobook|inspiron|latitude|pavilion|aspire)\b/;
 const LAPTOP_PART_WORDS = /\b(pantallas?|display|teclados?|baterias?|bisagras?|cargador(es)?|touchpad|pin de carga|carcasa)\b/;
 
 export function inferDevice(text: string): string {
@@ -1248,6 +1276,23 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   // Con una lista a la vista, un pedido nuevo de varias palabras ("El juego de tintas de la impresora Epson") tambien cuenta (oct-15).
   const newRequest = state.stage !== "choosing" || (normalized.split(" ").length >= 3 && !extractChoice(message, state.options.length + 1));
   const suppliesAsked = !serviceAsked && wantsSupplies(message) && newRequest && (explicitSupplies || !/\b(impresoras?|multifuncion|laptop|monitor|camara)\b/.test(normalized));
+  // "Tienen repuestos de Mac?": cotizacion de repuesto conversada, sin menu de equipos.
+  if (asksPartsQuote(message) && !aboutPayment && !isTicketStage(state.stage)) {
+    startTicket(state, "suministros", message);
+    state.ticket.tag = PARTS_TAG;
+    state.options = [];
+    const part = partRequest(message) || SWAP_PARTS.find((item) => item.words.test(normalized))?.label || "";
+    const brand = brandIn(message);
+    // Solo la marca ("repuestos de Mac") no dice que pieza: se pregunta.
+    state.ticket.issue = part ? message.trim().slice(0, 500) : "";
+    if (!part && brand) state.ticket.photoNote = `Repuesto para ${brand}`;
+    const intro = brand ? `Sí! Te cotizamos repuestos para tu ${brand} 🔧` : "Sí! Te cotizamos el repuesto 🔧";
+    if (!part) {
+      state.stage = "ticket_issue";
+      return reply(state, `${intro} Qué pieza necesitas? (pantalla, batería, teclado, cargador…) Si sabes el modelo exacto, mejor 🙌 También puedes mandarme una foto 📸`, "R10:repuestos_conversado");
+    }
+    return askTicketNext(state, deps, "R10:repuestos_conversado", intro);
+  }
   if (suppliesAsked && asksInk(normalized)) {
     const inks = await offerInks(state, deps, message, "R10:tintas");
     if (inks) return inks;

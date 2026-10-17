@@ -42,7 +42,7 @@ export const protectedPhrases = (text: string) => [
 const OPENS_WITH_GREETING = /^\W*(hola|holi|buen(os|as)|qu[eé] gusto|qu[eé] bueno (verte|saludarte|leerte)|soy \*?mila|te saluda)/i;
 
 /** La IA agrega datos que no estaban: "tu pedido MP-2024-0042", "equipo de ventas", precios o numeros nuevos. */
-const NEW_FACTS = /MP-|\$\d|\b(pedido|compra|ventas)\b/i;
+const NEW_FACTS = /MP-|\$\d|\b(pedido|compra|ventas|entrega inmediata|en stock|disponibles? (hoy|ya)|ultimas unidades|últimas unidades)\b/i;
 
 /** El borrador y la version de la IA conservan exactamente los mismos datos. */
 export function keepsData(draft: string, rewritten: string) {

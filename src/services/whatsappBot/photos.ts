@@ -1,4 +1,5 @@
 import axios from "axios";
+import { isTestPhone } from "../attentionReport.service";
 
 /**
  * Fotos de productos como IMAGEN de WhatsApp (no como link), por la API de
@@ -24,7 +25,8 @@ const toNumber = (phone: string) => phone.replace(/@.*$/, "").replace(/\D/g, "")
 type Photo = { url: string; caption: string };
 
 export async function sendProductPhotos(phone: string, images: Photo[]): Promise<Photo[]> {
-  if (!photosEnabled() || !images.length || !toNumber(phone)) return images;
+  // Numeros de simulacion (+5939900000xx): nunca se manda nada real por WhatsApp.
+  if (!photosEnabled() || !images.length || !toNumber(phone) || isTestPhone(phone)) return images;
   const startedAt = Date.now();
   // En orden (la foto 1 antes que la 2) y con tope de tiempo: BuilderBot espera la respuesta del flujo.
   for (const [index, image] of images.entries()) {

@@ -11,7 +11,7 @@ import * as gemini from "../src/services/gemini.service";
 import axios from "axios";
 import { decideFromSale, paymentAttempts, settleCardPayment } from "../src/services/payphone.service";
 import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
-import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn, inferDevice, partRequest, whatsappImageUrl } from "../src/services/whatsappBot/router";
+import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn, asksPartsQuote, inferDevice, partRequest, whatsappImageUrl } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164, withImages } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 import { estimateService } from "../src/services/whatsappBot/serviceCatalog";
@@ -919,6 +919,22 @@ async function main() {
     const oldSession = { ...createInitialState(), stage: "choosing" as const, options: [{ productId: "p1", name: "Laptop HP 15", price: 649 }], lastQuestion: "Recibí tu imagen 📎 Cuéntame qué necesitas" };
     const [noTrap] = await conversation(fakeDeps(), ["Quiero ese producto"], oldSession);
     assert.notEqual(noTrap.decision, "R9:eleccion_no_entendida");
+  });
+
+  await test("chat real 17-oct: 'Tienen respuesta de Mac?' es repuesto y se conversa, sin lista de equipos", async () => {
+    assert.equal(asksPartsQuote("Tienen respuesta de Mac? Conf"), true);
+    assert.equal(asksPartsQuote("tienen repuestos para lenovo"), true);
+    assert.equal(asksPartsQuote("no me llega respuesta del asesor"), false);
+    const fake = fakeDeps();
+    const turns = await conversation(fake, ["Tienen respuesta de Mac? Conf", "la pantalla de un MacBook Air 2020", "Diego Reyes", "sí"]);
+    assert.equal(turns[0].decision, "R10:repuestos_conversado");
+    assert.match(turns[0].reply, /^Sí! Te cotizamos repuestos para tu Mac 🔧 Qué pieza necesitas\?/);
+    assert.doesNotMatch(turns[0].reply, /Impresora|Cámaras/, "sin la lista de equipos");
+    assert.match(turns[2].reply, /Cotización de repuestos[\s\S]*la pantalla de un MacBook Air 2020\. Repuesto para Mac/);
+    assert.deepEqual(fake.tickets[0].tags, ["Cotización de repuestos"]);
+    const direct = await conversation(fakeDeps(), ["tienen repuestos de pantalla para Dell"]);
+    assert.equal(direct[0].step, "ticket_name", "si ya dijo la pieza, pasa al nombre");
+    assert.equal(cleanAnswer("Los tres modelos están disponibles para entrega inmediata. Te muestro las opciones 😊"), "Te muestro las opciones 😊");
   });
 
   await test("personalidad: lo que pide el equipo entra al prompt y las frases prohibidas se detectan", async () => {

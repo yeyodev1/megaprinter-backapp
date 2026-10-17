@@ -116,6 +116,16 @@ Todas responden **HTTP 200** siempre (un 4xx/5xx deja al cliente sin respuesta).
 Las Rules de BuilderBot van por **`route`** (ver "Flujos"). `decision` es solo para depurar
 (qué regla respondió). `intencion` se mantiene por compatibilidad con Boloncity.
 
+## Fotos de productos
+
+Cada lista de opciones (menú, búsqueda, foto de un producto, tintas, pregunta con opciones) manda la
+**foto de cada producto que la tenga cargada en la web** (`imageUrl`, Cloudinary). Las fotos van dentro de
+`message`, antes del texto, una por párrafo: `*1.* Producto — $precio` y en la línea siguiente el link.
+La respuesta también trae `images: [{url, caption}]` y `media` (la primera).
+
+En BuilderBot, los nodos HTTP que envían `{message}` tienen **Dividir párrafos** (`split`) e
+**Interpretar multimedia** (`interpretLinks`) activos: así cada link de imagen sale como foto en WhatsApp.
+
 ## Flujos en BuilderBot (6 flujos)
 
 **`/brain` solo decide** a qué flujo va el mensaje (`route`); no responde ni toca el pedido. Cada
@@ -123,7 +133,7 @@ flujo destino llama a su endpoint, que procesa el mensaje completo y responde en
 Todos los endpoints procesan el turno completo: consultas de pedido, pedidos sin método de pago y
 fotos se atienden bien aunque no tengan un flujo propio.
 
-Todos los nodos HTTP: `POST`, `Content-Type: application/json`, Body con campos (RAW apagado):
+Todos los nodos HTTP: `POST`, `Content-Type: application/json`, Interpretar multimedia activo, Body con campos (RAW apagado):
 `rawMessage = {body}`, `phone = {from}`, `history = {history}`, `urlTempFile = {urlTempFile}`.
 Base: `https://megaprinter-backapp.vercel.app/api/orders/whatsapp-bot`.
 

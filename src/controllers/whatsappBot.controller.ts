@@ -227,6 +227,7 @@ export async function loadCatalog(): Promise<BotProduct[]> {
     kind: doc.kind,
     description: doc.description || "",
     specs: (doc.specifications || []).map((spec: any) => `${spec.label}: ${spec.value}`).join("; "),
+    imageUrl: doc.imageUrl || "",
   }));
   catalogCache = { at: Date.now(), products };
   return products;
@@ -547,6 +548,16 @@ export const BOT_FALLBACK = {
   missingData: [],
 };
 
+/**
+ * Fotos de los productos dentro de `message`. Cada foto va en su propio parrafo
+ * (titulo + link): el nodo HTTP de BuilderBot parte el mensaje por parrafos
+ * ("split") y con "interpretLinks" manda el link de la imagen como foto.
+ */
+export function withImages(text: string, images: TurnResult["images"] = []) {
+  if (!images.length) return text;
+  return [...images.map((image) => `${image.caption}\n${image.url}`), text].join("\n\n");
+}
+
 function toBotResponse(result: TurnResult | null) {
   if (!result) return { ...BOT_FALLBACK, message: NO_PHONE_MESSAGE, readyToCheckout: false };
   return {
@@ -555,8 +566,10 @@ function toBotResponse(result: TurnResult | null) {
     intencion: result.intent,
     telefonoSoporte: SUPPORT_PHONE(),
     route: result.route,
-    // Nunca vacio: BuilderBot mandaria un mensaje en blanco.
-    message: casualMarks(result.reply || FALLBACK_MESSAGE),
+    // Nunca vacio: BuilderBot mandaria un mensaje en blanco. Las fotos van antes del texto.
+    message: withImages(casualMarks(result.reply || FALLBACK_MESSAGE), result.images),
+    images: result.images || [],
+    media: result.images?.[0]?.url || "",
     step: result.step,
     decision: result.decision,
     readyToCheckout: result.step === "confirm",

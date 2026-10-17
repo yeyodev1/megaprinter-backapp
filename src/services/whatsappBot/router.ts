@@ -117,6 +117,8 @@ export interface TurnResult {
   total?: number;
   /** Paso nuevo a un asesor: avisar al equipo (correo). No se repite si ya se aviso hace poco. */
   notifyTeam?: boolean;
+  /** Fotos de los productos que se muestran (el controlador las pone antes del texto). */
+  images?: { url: string; caption: string }[];
 }
 
 export interface TurnInput {
@@ -517,7 +519,10 @@ function showOptions(state: BotState, products: BotProduct[], decision: string, 
   // El catalogo completo es una opcion mas de la lista.
   const list = [...products.map((product, index) => productLine(product, index + 1)), `*${products.length + 1}.* 📚 Ver el catálogo completo`].join("\n");
   const ask = `${products.length === 1 ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*" : "Cuál te agrego? 🛒 Respóndeme con el número"}\nSi prefieres hablar con una persona, escribe *asesor* 🙋`;
-  return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}${outro ? `\n\n${outro}` : ""}`, decision);
+  const images = products
+    .map((product, index) => ({ url: product.imageUrl || "", caption: productLine(product, index + 1) }))
+    .filter((image) => /^https:\/\//.test(image.url));
+  return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}${outro ? `\n\n${outro}` : ""}`, decision, { images });
 }
 
 /** Datos para transferir: la cuenta del banco que nombro o todas las activas. */

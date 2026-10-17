@@ -13,6 +13,8 @@ export interface BotProduct {
   kind: "product" | "service";
   description: string;
   specs: string;
+  /** Foto en Cloudinary; el bot la manda junto con la lista de opciones. */
+  imageUrl?: string;
 }
 
 export const normalize = (text: string) =>

@@ -12,14 +12,14 @@ import axios from "axios";
 import { decideFromSale, paymentAttempts, settleCardPayment } from "../src/services/payphone.service";
 import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
 import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
-import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164 } from "../src/controllers/whatsappBot.controller";
+import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164, withImages } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 import { estimateService } from "../src/services/whatsappBot/serviceCatalog";
 import { lessonsForPrompt, reviewLesson } from "../src/services/whatsappBot/learning";
 import { transcriptsForPrompt } from "../src/services/botLearning.service";
 
 const CATALOG: BotProduct[] = [
-  { id: "p1", name: "Laptop HP 15 Core i5 16GB RAM 512GB SSD", price: 649, originalPrice: 749, category: "Laptops", kind: "product", description: "Laptop para trabajo y estudio", specs: "Procesador: Intel Core i5; RAM: 16GB; Almacenamiento: 512GB SSD" },
+  { id: "p1", name: "Laptop HP 15 Core i5 16GB RAM 512GB SSD", price: 649, originalPrice: 749, category: "Laptops", kind: "product", description: "Laptop para trabajo y estudio", specs: "Procesador: Intel Core i5; RAM: 16GB; Almacenamiento: 512GB SSD", imageUrl: "https://res.cloudinary.com/demo/image/upload/hp15.jpg" },
   { id: "p2", name: "Laptop Dell Inspiron Core i7 16GB RAM 1TB SSD", price: 899, originalPrice: null, category: "Laptops", kind: "product", description: "Rendimiento para diseño", specs: "Procesador: Intel Core i7; RAM: 16GB; Almacenamiento: 1TB SSD" },
   { id: "p3", name: "Impresora Epson L3250 tinta continua WiFi", price: 229, originalPrice: 259, category: "Impresoras", kind: "product", description: "Multifunción", specs: "Tipo: Tinta continua; Conectividad: WiFi" },
   { id: "p4", name: "Monitor AOC 24 pulgadas Full HD", price: 139, originalPrice: null, category: "Monitores", kind: "product", description: "Monitor IPS", specs: "Tamaño: 24 pulgadas; Resolución: 1920x1080" },
@@ -833,6 +833,16 @@ async function main() {
     assert.equal(fake.tickets[0].type, "suministros");
     assert.equal((await conversation(fake, ["quiero que alguien me ayude"]))[0].route, "human");
     assert.equal((await conversation(fake, ["donde les pago"]))[0].decision, "R3:datos_cuenta");
+  });
+
+  await test("fotos: la lista manda la foto de cada producto que la tiene cargada", async () => {
+    const laptops = (await conversation(fakeDeps(), ["hola", "2"]))[1];
+    assert.equal(laptops.images?.length, 1, "solo la HP tiene foto");
+    assert.match(laptops.images![0].caption, /^\*1\.\* Laptop HP 15/);
+    const message = withImages(laptops.reply, laptops.images);
+    assert.match(message, /^\*1\.\* Laptop HP 15[^\n]*\nhttps:\/\/res\.cloudinary\.com\/demo\/image\/upload\/hp15\.jpg\n\n/);
+    assert.ok(message.endsWith(laptops.reply), "el texto con la pregunta va al final");
+    assert.equal(withImages("hola", []), "hola");
   });
 
   await test("menú numerado: el saludo muestra opciones y cada número lleva a su lugar", async () => {

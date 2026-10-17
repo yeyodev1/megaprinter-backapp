@@ -11,7 +11,7 @@ import * as gemini from "../src/services/gemini.service";
 import axios from "axios";
 import { decideFromSale, paymentAttempts, settleCardPayment } from "../src/services/payphone.service";
 import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
-import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn } from "../src/services/whatsappBot/router";
+import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn, whatsappImageUrl } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164, withImages } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 import { estimateService } from "../src/services/whatsappBot/serviceCatalog";
@@ -843,6 +843,12 @@ async function main() {
     assert.match(message, /^\*1\.\* Laptop HP 15[^\n]*\nhttps:\/\/res\.cloudinary\.com\/demo\/image\/upload\/hp15\.jpg\n\n/);
     assert.ok(message.endsWith(laptops.reply), "el texto con la pregunta va al final");
     assert.equal(withImages("hola", []), "hola");
+    assert.equal(
+      whatsappImageUrl("https://res.cloudinary.com/uvbyfyme/image/upload/f_auto,q_auto/v1/megaprinter/catalog/epson-l1250"),
+      "https://res.cloudinary.com/uvbyfyme/image/upload/q_auto/v1/megaprinter/catalog/epson-l1250.jpg",
+      "Cloudinary sin extension se pide en .jpg",
+    );
+    assert.equal(whatsappImageUrl("https://res.cloudinary.com/x/image/upload/v1/a/b.jpg"), "https://res.cloudinary.com/x/image/upload/v1/a/b.jpg");
   });
 
   await test("menú numerado: el saludo muestra opciones y cada número lleva a su lugar", async () => {

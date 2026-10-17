@@ -511,6 +511,16 @@ function askNext(state: BotState, deps: BotDeps, decision: string, prefix = ""):
   return reply(state, join(questionFor(state.stage, deps)), decision);
 }
 
+/**
+ * WhatsApp y BuilderBot reconocen la foto por la extension. Varias fotos del
+ * catalogo en Cloudinary no la tienen y usan f_auto (webp/avif): se piden en .jpg.
+ */
+export function whatsappImageUrl(url: string) {
+  if (!/^https:\/\/res\.cloudinary\.com\//.test(url)) return url;
+  const clean = url.replace(/\/f_auto,/, "/").replace(/,f_auto(?=[,/])/, "").replace(/\/f_auto\//, "/");
+  return /\.(jpe?g|png)$/i.test(clean) ? clean : `${clean.replace(/\.(webp|avif|gif)$/i, "")}.jpg`;
+}
+
 function showOptions(state: BotState, products: BotProduct[], decision: string, intro?: string, outro = "", keepTicket = false): TurnResult {
   state.options = products.map(toOption);
   state.stage = "choosing";
@@ -520,7 +530,7 @@ function showOptions(state: BotState, products: BotProduct[], decision: string, 
   const list = [...products.map((product, index) => productLine(product, index + 1)), `*${products.length + 1}.* 📚 Ver el catálogo completo`].join("\n");
   const ask = `${products.length === 1 ? "Te lo agrego al pedido? 🛒 Respóndeme *sí* o *1*" : "Cuál te agrego? 🛒 Respóndeme con el número"}\nSi prefieres hablar con una persona, escribe *asesor* 🙋`;
   const images = products
-    .map((product, index) => ({ url: product.imageUrl || "", caption: productLine(product, index + 1) }))
+    .map((product, index) => ({ url: whatsappImageUrl(product.imageUrl || ""), caption: productLine(product, index + 1) }))
     .filter((image) => /^https:\/\//.test(image.url));
   return reply(state, `${intro || "Mira estas opciones que tengo para ti 👇✨"}\n\n${list}\n\n${ask}${outro ? `\n\n${outro}` : ""}`, decision, { images });
 }

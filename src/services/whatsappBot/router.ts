@@ -60,6 +60,8 @@ export interface BotState {
     tag?: string;
     /** Fotos que mando durante la solicitud (copias en Cloudinary). */
     photos?: string[];
+    /** Lo que se vio en una foto que no dice que pieza necesita (se suma cuando la diga). */
+    photoNote?: string;
   };
   /** Ultima lista numerada que se eligio: "3" al pedir el nombre puede ser "ver el catalogo" de esa lista. */
   lastOptions?: Array<{ productId: string; name: string; price: number }>;
@@ -914,7 +916,7 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
     if (/\?\s*$/.test(text) && !describesIssue(text) && normalize(text).split(" ").length <= 6) {
       return askTicketNext(state, deps, "R10:ticket_pregunta", "Eso te lo confirma una persona del equipo apenas registre tu solicitud 🙌");
     }
-    state.ticket.issue = text.slice(0, 500);
+    state.ticket.issue = [text, state.ticket.photoNote].filter(Boolean).join(". ").slice(0, 500);
     return askTicketNext(state, deps, "R10:ticket_detalle");
   }
   if (state.stage === "ticket_confirm") {
@@ -977,13 +979,19 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     if (outcome.status === "image" && isTicketStage(state.stage)) {
       const seen = outcome.description.trim();
       if (outcome.photoUrl) state.ticket.photos = [...(state.ticket.photos || []), outcome.photoUrl].slice(-5);
+      const parts = state.ticket.tag === PARTS_TAG;
+      // Cotizacion de repuesto con la foto del equipo entero: falta saber que pieza (no se adivina).
+      const missingPart = parts && state.stage === "ticket_issue" && Boolean(seen) && !partRequest(`una ${seen}`) && !PARTS.test(normalize(seen)) && !LAPTOP_PART_WORDS.test(normalize(seen));
+      if (missingPart) {
+        state.ticket.photoNote = `Foto: ${seen}`.slice(0, 300);
+        return reply(state, `Recibí tu foto 📎 Veo ${seen}. Qué pieza necesitas de ese equipo? 🔧 (pantalla, batería, teclado, cargador, cabezal…)`, "R1:foto_repuesto_sin_pieza");
+      }
       if (seen) {
         const note = `Foto: ${seen}`;
         // En el paso del problema la foto ES la respuesta ("esto necesito"); en otros pasos se suma al detalle.
         if (state.stage === "ticket_issue" || !state.ticket.issue) state.ticket.issue = note.slice(0, 500);
         else state.ticket.issue = `${state.ticket.issue}. ${note}`.slice(0, 500);
       }
-      const parts = state.ticket.tag === PARTS_TAG;
       const intro = seen
         ? `Recibí tu foto 📎 Veo ${seen.replace(/^(un|una|el|la)\s/i, (article) => article.toLowerCase())}. ${parts ? "La uso para cotizar el repuesto exacto 🔧" : "El técnico la revisa junto con tu solicitud."}`
         : "Recibí tu foto 📎 El técnico la revisa junto con tu solicitud.";

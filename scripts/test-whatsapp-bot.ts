@@ -881,6 +881,18 @@ async function main() {
     assert.deepEqual(fake.tickets[0].tags, ["Cotización de repuestos"]);
   });
 
+  await test("cotización con la foto del equipo entero: pregunta qué pieza y suma lo que vio", async () => {
+    const fake = fakeDeps({
+      receipt: { status: "image", kind: "product", description: "una laptop Lenovo IdeaPad Slim 3 gris", searchQuery: "laptop lenovo", productIds: [], exactMatch: false, photoUrl: "https://res.cloudinary.com/x/l.jpg" },
+    });
+    const turns = await conversation(fake, ["hola", "7", { media: "https://x.test/l.jpg" }, "la pantalla", "Ramiro Cevallos", "sí"]);
+    assert.equal(turns[2].decision, "R1:foto_repuesto_sin_pieza");
+    assert.match(turns[2].reply, /Qué pieza necesitas de ese equipo/);
+    assert.equal(turns[3].decision, "R10:ticket_detalle");
+    assert.equal(fake.tickets[0].issue, "la pantalla. Foto: una laptop Lenovo IdeaPad Slim 3 gris");
+    assert.deepEqual(fake.tickets[0].photos, ["https://res.cloudinary.com/x/l.jpg"]);
+  });
+
   await test("personalidad: lo que pide el equipo entra al prompt y las frases prohibidas se detectan", async () => {
     assert.equal(personaForPrompt({ personality: "", alwaysSay: [], neverSay: [] }), "");
     const block = personaForPrompt({ personality: "Seria pero cálida", alwaysSay: ["Ofrece el retiro en tienda"], neverSay: ['Nunca digas "mi amor"'] });

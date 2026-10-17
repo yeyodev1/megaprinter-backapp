@@ -123,8 +123,11 @@ Cada lista de opciones (menú, búsqueda, foto de un producto, tintas, pregunta 
 `message`, antes del texto, una por párrafo: `*1.* Producto — $precio` y en la línea siguiente el link.
 La respuesta también trae `images: [{url, caption}]` y `media` (la primera).
 
-En BuilderBot, los nodos HTTP que envían `{message}` tienen **Dividir párrafos** (`split`) e
-**Interpretar multimedia** (`interpretLinks`) activos: así cada link de imagen sale como foto en WhatsApp.
+**Como imagen (no link):** con `BUILDERBOT_BOT_API_KEY` (llave `bb-…` del bot, *Ajustes > Desarrollador*) en
+Vercel, el backend manda cada foto con su título por la API de mensajes de BuilderBot
+(`POST /api/v2/{proyecto}/messages`, `messages.mediaUrl`) **antes** de responder; el texto llega después.
+Solo responde a un mensaje del cliente, nunca escribe primero. Sin la llave, o si una foto falla, esa foto va
+como link dentro de `message` (nodos HTTP con `split` e `interpretLinks` activos).
 
 ## Flujos en BuilderBot (6 flujos)
 
@@ -197,6 +200,7 @@ Se revisaron ~45 conversaciones de producción (`pnpm bot:logs -- --limit 5000`)
 | `PUBLIC_WEB_URL` | Base del link de pago (por defecto `https://megaprinter.ec`). |
 | `BOT_SUPPORT_PHONE` | Opcional: número que el bot da cuando piden un asesor. |
 | `WHATSAPP_BOT_SECRET` | Opcional: exige `X-Bot-Token`. |
+| `BUILDERBOT_BOT_API_KEY` | Llave `bb-…` del bot en BuilderBot: manda las fotos de productos como imagen. `BUILDERBOT_PROJECT_ID` opcional. |
 | `BOT_TEST_PHONE` | Solo fuera de producción: fija el teléfono (pruebas por Telegram/Postman). |
 | Ya existentes | `PAYPHONE_TOKEN`, `PAYPHONE_STORE_ID`, `CLOUDINARY_*`, `RESEND_API_KEY`, `EMAIL_TO`. |
 

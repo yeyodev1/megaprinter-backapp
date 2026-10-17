@@ -14,6 +14,7 @@ import { createAlert } from "../services/alerts.service";
 import { escapeHtml, sendEmail, storeRecipients } from "../services/email.service";
 import { logBotEvent } from "../services/whatsappBot/activity";
 import { naturalize } from "../services/whatsappBot/voice";
+import { sendProductPhotos } from "../services/whatsappBot/photos";
 import { claimsPaid } from "../services/whatsappBot/intents";
 import {
   activeBankAccounts,
@@ -752,6 +753,8 @@ export async function whatsappBotTurn(req: Request, res: Response) {
         durationMs: Date.now() - startedAt,
       });
     }
+    // Fotos como imagen de WhatsApp antes del texto; las que no salgan van como link en el mensaje.
+    if (result?.images?.length && !(result as any).duplicated) result.images = await sendProductPhotos(phone, result.images);
     res.json(toBotResponse(result));
   } catch (error) {
     console.error(`[bot] ${phone} /${endpoint} ❌ ERROR | 👤 ${oneLine(message)} |`, error);

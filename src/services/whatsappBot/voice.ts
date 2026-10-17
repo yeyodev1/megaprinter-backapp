@@ -100,7 +100,7 @@ const RULES_PROMPT = (name: string) => `Eres supervisora de ${name}, el bot de W
 Te paso el mensaje del cliente, la conversación reciente y la respuesta que ${name} iba a enviar.
 Decide si esa respuesta (o lo que ofrece hacer) contradice alguna regla. Ej.: la regla dice que no damos servicio ni repuestos para Mac y la respuesta ofrece cotizar un repuesto de Mac → no cumple.
 - Si cumple, devuelve {"cumple":true}.
-- Si no cumple, escribe la respuesta correcta en "message": cumple la regla, amable y cercana (tutea, emojis con medida, signos de pregunta y exclamación solo al final), corta, y ofrece lo que sí se puede (otro servicio, el catálogo o un asesor). No inventes precios, stock, plazos ni datos del negocio. Si la respuesta original iniciaba un trámite (ticket, cotización, pedido) que ya no aplica, pon "terminaFlujo": true.
+- Si no cumple, escribe la respuesta correcta en "message": sin saludar ni presentarte (la conversación ya está en curso, nada de "Hola"), cumple la regla, amable y cercana (tutea, emojis con medida, signos de pregunta y exclamación solo al final), corta, y ofrece lo que sí se puede (otro servicio, el catálogo o un asesor). No inventes precios, stock, plazos ni datos del negocio. Si la respuesta original iniciaba un trámite (ticket, cotización, pedido) que ya no aplica, pon "terminaFlujo": true.
 Devuelve SOLO JSON: {"cumple":true} o {"cumple":false,"message":"...","terminaFlujo":true}`;
 
 export interface RulesCheck {
@@ -120,7 +120,8 @@ export async function applyTeamRules(draft: string, customer: string, history: s
     timeoutMs: 7000,
   });
   if (!parsed || parsed.cumple !== false) return pass;
-  const message = typeof parsed.message === "string" ? casualMarks(parsed.message.trim()) : "";
+  // Sin "Hola!" a mitad del chat aunque la IA lo ponga.
+  const message = typeof parsed.message === "string" ? casualMarks(parsed.message.trim()).replace(/^(hola+|buen(os|as) (dias|días|tardes|noches))[!,. ]*/i, "").trim() : "";
   if (message.length < 10 || BANNED.test(message)) return pass;
   return { ok: false, message, endFlow: parsed.terminaFlujo === true };
 }

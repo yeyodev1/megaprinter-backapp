@@ -20,7 +20,7 @@ import { slugify } from "../../utils/slugify";
  * preguntas · R9 siguiente paso.
  */
 
-export type Stage = "idle" | "choosing" | "name" | "email" | "address" | "payment" | "bank" | "confirm" | "ordered" | "ticket_name" | "ticket_device" | "ticket_issue" | "ticket_confirm";
+export type Stage = "idle" | "choosing" | "name" | "email" | "address" | "payment" | "bank" | "confirm" | "ordered" | "ticket_name" | "ticket_device" | "ticket_option" | "ticket_issue" | "ticket_confirm";
 
 export interface CartLine {
   productId: string;
@@ -43,7 +43,22 @@ export interface BotState {
   /** Pidio que no le escriban (queda registrado en la conversacion). */
   optOut: boolean;
   /** Solicitud de servicio tecnico o suministros en curso (la termina un asesor). */
-  ticket: { type: "servicio_tecnico" | "suministros" | ""; device: string; issue: string; stageBefore: Stage; nameTries?: number; nameSkipped?: boolean; deviceTries?: number };
+  ticket: {
+    type: "servicio_tecnico" | "suministros" | "";
+    device: string;
+    issue: string;
+    stageBefore: Stage;
+    nameTries?: number;
+    nameSkipped?: boolean;
+    deviceTries?: number;
+    /** Pieza que pidio cambiar ("pantalla"): se ofrece cambio en taller o cotizacion del repuesto. */
+    part?: string;
+    /** Lo que eligio: cambio en el taller o solo cotizar el repuesto. */
+    mode?: "taller" | "repuesto";
+    optionTries?: number;
+    /** Etiqueta automatica del ticket (p. ej. "Cotización de repuestos"). */
+    tag?: string;
+  };
   /** Ultima lista numerada que se eligio: "3" al pedir el nombre puede ser "ver el catalogo" de esa lista. */
   lastOptions?: Array<{ productId: string; name: string; price: number }>;
   orderId: string;
@@ -186,6 +201,8 @@ export interface TicketDraft {
   device: string;
   issue: string;
   estimate: ServiceEstimate | null;
+  /** Etiquetas automaticas ("Cotización de repuestos"). */
+  tags: string[];
 }
 
 export interface BotDeps {
@@ -629,7 +646,7 @@ const ISSUE_EXAMPLES: Record<string, string> = {
   camara: "no graba, no se ve en el celular",
 };
 
-const TICKET_STAGES: Stage[] = ["ticket_name", "ticket_device", "ticket_issue", "ticket_confirm"];
+const TICKET_STAGES: Stage[] = ["ticket_name", "ticket_device", "ticket_option", "ticket_issue", "ticket_confirm"];
 const isTicketStage = (stage: Stage) => TICKET_STAGES.includes(stage);
 
 const FILLER = new Set(
@@ -654,12 +671,59 @@ function describesProblem(message: string) {
   return describesNeed(message) && (ISSUE_WORDS.test(value) || ISSUE_DETAIL.test(value));
 }
 
+export const PARTS_TAG = "Cotización de repuestos";
+
+/** Piezas de laptop/PC que se cambian o se cotizan sueltas. */
+const SWAP_PARTS: Array<{ label: string; words: RegExp }> = [
+  { label: "pantalla", words: /pantallas?|display|lcd|touch/ },
+  { label: "teclado", words: /teclados?/ },
+  { label: "batería", words: /baterias?|pila/ },
+  { label: "bisagras", words: /bisagras?/ },
+  { label: "cargador", words: /cargador(es)?|adaptador(es)?/ },
+  { label: "disco", words: /disco( solido| duro)?|ssd/ },
+  { label: "memoria RAM", words: /memorias?( ram)?|ram/ },
+  { label: "ventilador", words: /ventilador(es)?|fan/ },
+  { label: "pin de carga", words: /pin de carga|puerto de carga/ },
+  { label: "carcasa", words: /carcasa|tapa/ },
+];
+
+/**
+ * "Cambio de pantalla de una Dell", "una pantalla para mi laptop", "necesito
+ * una batería": pide cambiar o conseguir una pieza (no cuenta una falla como
+ * "la pantalla sale verde"). Devuelve la pieza o "".
+ */
+export function partRequest(text: string) {
+  const value = normalize(text);
+  for (const part of SWAP_PARTS) {
+    const word = part.words.source;
+    const asks = new RegExp(
+      `\\b(cambi(o|ar|en|an|ame)|reemplaz\\w*|repuesto|cotiza\\w*|necesito|busco|quiero|venden|tienen|hay|una?|nuevas?|nuevos?|otra?|solo)( de| del| para)?( la| el| las| los| una| un| mi)?\\s+(${word})\\b`,
+    );
+    if (asks.test(value)) return part.label;
+  }
+  return "";
+}
+
+/** Marca de laptop + pieza de laptop: es una laptop aunque no lo diga ("pantalla de una Dell"). */
+const LAPTOP_BRANDS = /\b(dell|lenovo|asus|acer|toshiba|hp|huawei|msi|macbook|apple|samsung|vaio|thinkpad|ideapad|vivobook|inspiron|latitude|pavilion|aspire)\b/;
+const LAPTOP_PART_WORDS = /\b(pantallas?|display|teclados?|baterias?|bisagras?|cargador(es)?|touchpad|pin de carga|carcasa)\b/;
+
+export function inferDevice(text: string): string {
+  const direct = detectDevice(text);
+  if (direct) return direct;
+  const value = normalize(text);
+  return LAPTOP_BRANDS.test(value) && LAPTOP_PART_WORDS.test(value) ? "laptop" : "";
+}
+
 function startTicket(state: BotState, type: "servicio_tecnico" | "suministros", message: string) {
-  const device = type === "servicio_tecnico" ? detectDevice(message) : "";
+  const device = type === "servicio_tecnico" ? inferDevice(message) : "";
+  const part = type === "servicio_tecnico" ? partRequest(message) : "";
   // Si el mensaje ya cuenta el problema ("mi impresora no imprime"), se usa como descripcion.
   // "necesito servicio tecnico para mi impresora" no cuenta ningun problema.
   const issue = (type === "suministros" ? describesNeed(message) : describesProblem(message)) ? message.trim().slice(0, 500) : "";
-  state.ticket = { type, device, issue, stageBefore: isTicketStage(state.stage) ? state.ticket.stageBefore : state.stage };
+  state.ticket = { type, device, issue, stageBefore: isTicketStage(state.stage) ? state.ticket.stageBefore : state.stage, ...(part ? { part } : {}) };
+  // Suministros que son repuestos (cargador, batería, pantalla…): etiqueta automatica.
+  if (type === "suministros" && (PARTS.test(normalize(message)) || partRequest(message))) state.ticket.tag = PARTS_TAG;
 }
 
 /**
@@ -669,6 +733,8 @@ function startTicket(state: BotState, type: "servicio_tecnico" | "suministros", 
  */
 function ticketMissing(state: BotState): Stage {
   if (state.ticket.type === "servicio_tecnico" && !state.ticket.device) return "ticket_device";
+  // Pidio cambiar una pieza: cambio en el taller o solo cotizar el repuesto (Ramiro Cevallos, 16-oct).
+  if (state.ticket.type === "servicio_tecnico" && state.ticket.part && !state.ticket.mode) return "ticket_option";
   if (!state.ticket.issue) return "ticket_issue";
   if (!state.customerName && !state.ticket.nameSkipped) return "ticket_name";
   return "ticket_confirm";
@@ -676,13 +742,14 @@ function ticketMissing(state: BotState): Stage {
 
 function ticketSummary(state: BotState, deps: BotDeps, catalog: BotProduct[]) {
   if (state.ticket.type === "suministros") {
+    const parts = state.ticket.tag === PARTS_TAG;
     return [
-      "Perfecto, armé tu solicitud 🧴",
+      parts ? "Perfecto, armé tu cotización 🔧" : "Perfecto, armé tu solicitud 🧴",
       "",
-      "🧾 *Suministros*",
+      parts ? `🧾 *${PARTS_TAG}*` : "🧾 *Suministros*",
       `📝 Necesitas: ${state.ticket.issue}`,
       ...(state.customerName ? [`👤 ${state.customerName}`] : []),
-      "💲 Te cotizamos según la marca y el modelo",
+      parts ? "💲 Te cotizamos el repuesto original o compatible según la marca y el modelo" : "💲 Te cotizamos según la marca y el modelo",
       "",
       "La registro y te paso con un asesor? Respóndeme *sí* ✅",
     ].join("\n");
@@ -707,6 +774,23 @@ async function askTicketNext(state: BotState, deps: BotDeps, decision: string, p
   if (state.stage === "ticket_device") {
     const list = DEVICES.map((device, index) => `*${index + 1}.* ${device.emoji} ${device.label}`).join("\n");
     return reply(state, join(`Con qué equipo te ayudamos? 🛠️\n${list}`), decision);
+  }
+  if (state.stage === "ticket_option") {
+    const part = state.ticket.part || "pieza";
+    const equipo = `tu ${deviceLabel(state.ticket.device).toLowerCase()}`;
+    return reply(
+      state,
+      join(
+        [
+          `Para la ${part} de ${equipo} tengo dos opciones 👇`,
+          `*1.* 🛠️ Cambio en nuestro taller: conseguimos la ${part} y la instalamos (el diagnóstico es sin costo)`,
+          `*2.* 🧾 Cotización de repuesto: te cotizamos solo la ${part}`,
+          "",
+          "Cuál prefieres? Respóndeme *1* o *2*",
+        ].join("\n"),
+      ),
+      decision,
+    );
   }
   if (state.stage === "ticket_issue") {
     return reply(
@@ -741,11 +825,13 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
     return reply(state, "Listo, no la registro 👍 Si después necesitas el servicio, aquí estoy. Te ayudo con algo más? 😊", "R10:ticket_cancelado");
   }
   // "que precio tiene la revision?" en medio del ticket: se responde y se sigue.
-  if (asksServicePrice(text) || (state.ticket.type === "servicio_tecnico" && /^(que |cual es el |y el )?(precio|costo|cuanto)( tiene| es| cuesta| cobran)?\??$/.test(normalize(text)))) {
+  // En las dos opciones (taller o repuesto) "precio" o "cuánto" eligen cotizar: no salen del ticket.
+  const choosingOption = state.stage === "ticket_option";
+  if (!choosingOption && (asksServicePrice(text) || (state.ticket.type === "servicio_tecnico" && /^(que |cual es el |y el )?(precio|costo|cuanto)( tiene| es| cuesta| cobran)?\??$/.test(normalize(text))))) {
     return askTicketNext(state, deps, "R10:ticket_precio", servicePriceText(`${state.ticket.device} ${text}`, await deps.loadCatalog()));
   }
   // Precio de un producto ("precio de la impresora L3350"): se deja el ticket y se atiende normal.
-  if (/\b(precio|cuanto cuesta|cuanto vale)\b/.test(normalize(text))) {
+  if (!choosingOption && /\b(precio|cuanto cuesta|cuanto vale)\b/.test(normalize(text))) {
     leaveTicket();
     return null;
   }
@@ -772,14 +858,45 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
   if (state.stage === "ticket_device") {
     const choice = extractChoice(text, DEVICES.length);
     // "Para fin de semana", "?", "Mmm, entiendo": no es un equipo; se pregunta una vez mas (chats reales oct-15).
-    if (!choice && !detectDevice(text) && !(state.ticket.deviceTries || 0)) {
+    if (!choice && !inferDevice(text) && !(state.ticket.deviceTries || 0)) {
       state.ticket.deviceTries = 1;
       if (describesIssue(text) || ISSUE_DETAIL.test(normalize(text))) state.ticket.issue = text.slice(0, 500);
       return askTicketNext(state, deps, "R10:ticket_equipo_no_entendido", "Para anotarlo bien 🙌");
     }
-    state.ticket.device = choice ? DEVICES[choice - 1].key : detectDevice(text) || text.slice(0, 60);
+    state.ticket.device = choice ? DEVICES[choice - 1].key : inferDevice(text) || text.slice(0, 60);
     if (!state.ticket.issue && detectDevice(text) && describesProblem(text)) state.ticket.issue = text.slice(0, 500);
     return askTicketNext(state, deps, "R10:ticket_equipo");
+  }
+  if (state.stage === "ticket_option") {
+    const value = normalize(text);
+    const choice = extractChoice(text, 2);
+    const wantsQuote = choice === 2 || /\b(cotiza\w*|repuesto|solo (la|el|las|los)?|precio|cuanto|la compro|comprar|la instalo|yo la cambio)\b/.test(value);
+    const wantsShop = choice === 1 || /\b(taller|instal\w*|cambi\w*|repar\w*|arregl\w*|ustedes|llevo|dejar|la primera)\b/.test(value);
+    if (wantsQuote && !(wantsShop && choice !== 2)) {
+      const part = state.ticket.part || "repuesto";
+      const brand = normalize(state.ticket.issue).match(LAPTOP_BRANDS)?.[1] || "";
+      state.ticket = {
+        ...state.ticket,
+        type: "suministros",
+        mode: "repuesto",
+        tag: PARTS_TAG,
+        issue: `${part.charAt(0).toUpperCase()}${part.slice(1)} para ${deviceLabel(state.ticket.device).toLowerCase()}${brand ? ` ${brand.charAt(0).toUpperCase()}${brand.slice(1)}` : ""}${state.ticket.issue ? ` (${state.ticket.issue})` : ""}`.slice(0, 500),
+      };
+      return askTicketNext(state, deps, "R10:ticket_cotizar_repuesto", "Dale! Te cotizamos el repuesto 🔧 Si tienes el modelo exacto (sale en la etiqueta de abajo del equipo), mándamelo o envíame una foto 📸");
+    }
+    if (wantsShop) {
+      state.ticket.mode = "taller";
+      if (!state.ticket.issue) state.ticket.issue = `Cambio de ${state.ticket.part}`;
+      return askTicketNext(state, deps, "R10:ticket_cambio_taller", "Perfecto, lo hacemos en el taller 🛠️");
+    }
+    // No se entendio: se pregunta una vez mas y luego se sigue como cambio en taller (lo afina el asesor).
+    state.ticket.optionTries = (state.ticket.optionTries || 0) + 1;
+    if (state.ticket.optionTries >= 2) {
+      state.ticket.mode = "taller";
+      if (!state.ticket.issue) state.ticket.issue = `Cambio de ${state.ticket.part}. ${text}`.slice(0, 500);
+      return askTicketNext(state, deps, "R10:ticket_opcion_por_defecto");
+    }
+    return askTicketNext(state, deps, "R10:ticket_opcion_no_entendida", "Para ayudarte bien 🙌");
   }
   if (state.stage === "ticket_issue") {
     if (text.length < 3) return askTicketNext(state, deps, "R10:ticket_detalle_corto");
@@ -800,8 +917,9 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
         device: state.ticket.device,
         issue: state.ticket.issue,
         estimate,
+        tags: state.ticket.tag ? [state.ticket.tag] : [],
       });
-      const kind = state.ticket.type === "suministros" ? "solicitud de suministros" : "ticket de servicio técnico";
+      const kind = state.ticket.tag === PARTS_TAG ? "cotización de repuesto" : state.ticket.type === "suministros" ? "solicitud de suministros" : "ticket de servicio técnico";
       state.stage = "idle";
       state.ticket = createInitialState().ticket;
       return toHuman(state, `Listo! ✅ Tu ${kind} *${ticketNumber}* quedó registrado 🙌\n\nEn breve un asesor tomará el chat para ayudarte 💙`, "R10:ticket_creado");
@@ -1049,7 +1167,9 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
   const normalized = normalize(message);
   // "no funciona el link de pago" es del pago, no servicio tecnico.
   const aboutPayment = /\b(link|pago|pagar|tarjeta|transferencia|comprobante|pedido|payphone)\b/.test(normalized);
-  const serviceAsked = wantsService(message) && !claimsPaid(message) && !aboutPayment;
+  // "Cambio de pantalla de una Dell": pieza de laptop/PC que se instala → servicio con las dos opciones (taller o repuesto).
+  const partSwap = Boolean(partRequest(message)) && !PARTS.test(normalized) && ["laptop", "pc"].includes(inferDevice(message));
+  const serviceAsked = (wantsService(message) || partSwap) && !claimsPaid(message) && !aboutPayment;
   // "impresora de tinta continua" es un producto; "tinta para mi Epson" o "toner" son suministros.
   const explicitSupplies = /\b(suministros?|toner|cartuchos?|botellas?|repuestos?|consumibles?)\b/.test(normalized) || PARTS.test(normalized);
   // Con una lista a la vista, un pedido nuevo de varias palabras ("El juego de tintas de la impresora Epson") tambien cuenta (oct-15).
@@ -1353,7 +1473,8 @@ Para ver el estado de tu pedido escribe *mi pedido*.`, "R9:saludo");
     }
     if (extraction.intent === "cuenta_bancaria" && deps.banks.length) return bankAccountsReply(state, deps, message);
     if (extraction.intent === "servicio_tecnico") {
-      startTicket(state, "servicio_tecnico", extraction.searchQuery || message);
+      // El mensaje completo: la busqueda de la IA pierde la pieza y la marca ("cambio de pantalla de una Dell").
+      startTicket(state, "servicio_tecnico", partRequest(message) || inferDevice(message) ? message : extraction.searchQuery || message);
       return askTicketNext(state, deps, "R10:servicio_ia", "Claro! Te ayudo con el servicio técnico 🛠️");
     }
     if (extraction.intent === "suministros") {

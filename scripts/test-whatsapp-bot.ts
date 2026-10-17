@@ -11,7 +11,7 @@ import * as gemini from "../src/services/gemini.service";
 import axios from "axios";
 import { decideFromSale, paymentAttempts, settleCardPayment } from "../src/services/payphone.service";
 import { keepsData, naturalize } from "../src/services/whatsappBot/voice";
-import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn, whatsappImageUrl } from "../src/services/whatsappBot/router";
+import { BotDeps, BotState, CardCheck, OrderSummary, ReceiptOutcome, TurnResult, createInitialState, decideRoute, handleTurn, inferDevice, partRequest, whatsappImageUrl } from "../src/services/whatsappBot/router";
 import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE164, withImages } from "../src/controllers/whatsappBot.controller";
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 import { estimateService } from "../src/services/whatsappBot/serviceCatalog";
@@ -834,6 +834,38 @@ async function main() {
     assert.equal(fake.tickets[0].type, "suministros");
     assert.equal((await conversation(fake, ["quiero que alguien me ayude"]))[0].route, "human");
     assert.equal((await conversation(fake, ["donde les pago"]))[0].decision, "R3:datos_cuenta");
+  });
+
+  await test("Ramiro Cevallos (16-oct): cambio de pantalla de una Dell ofrece taller o cotización de repuesto", async () => {
+    assert.equal(partRequest("Cambio de pantalla de una Dell"), "pantalla");
+    assert.equal(partRequest("Una pantalla para una laptop Dell pantalla táctil Slim"), "pantalla");
+    assert.equal(partRequest("tengo una hp de 14 pulgadas la pantalla sale verde"), "", "una falla no es pedir la pieza");
+    assert.equal(inferDevice("Cambio de pantalla de una Dell"), "laptop");
+    assert.equal(inferDevice("mi epson no imprime"), "impresora");
+
+    const quote = fakeDeps();
+    const turns = await conversation(quote, ["Cambio de pantalla de una Dell", "2", "Ramiro Cevallos", "sí"]);
+    assert.equal(turns[0].step, "ticket_option", "no vuelve a preguntar el equipo");
+    assert.match(turns[0].reply, /\*1\.\* 🛠️ Cambio en nuestro taller[\s\S]*\*2\.\* 🧾 Cotización de repuesto/);
+    assert.equal(turns[1].decision, "R10:ticket_cotizar_repuesto");
+    assert.match(turns[2].reply, /Cotización de repuestos[\s\S]*Pantalla para laptop Dell/);
+    assert.equal(turns[3].decision, "R10:ticket_creado");
+    assert.match(turns[3].reply, /cotización de repuesto \*ST-00001\*/);
+    assert.deepEqual(quote.tickets[0].tags, ["Cotización de repuestos"]);
+    assert.equal(quote.tickets[0].type, "suministros");
+
+    const shop = fakeDeps();
+    const repair = await conversation(shop, ["Cambio de pantalla de una Dell", "1", "Ramiro Cevallos", "sí"]);
+    assert.equal(repair[1].decision, "R10:ticket_cambio_taller");
+    assert.equal(shop.tickets[0].type, "servicio_tecnico");
+    assert.deepEqual(shop.tickets[0].tags, []);
+
+    const byPrice = await conversation(fakeDeps(), ["Cambio de pantalla de una Dell", "cuanto cuesta la pantalla"]);
+    assert.equal(byPrice[1].decision, "R10:ticket_cotizar_repuesto", "preguntar el precio elige cotizar, no sale del ticket");
+
+    const charger = fakeDeps();
+    await conversation(charger, ["necesito un cargador para laptop lenovo", "Ana Pérez", "sí"]);
+    assert.deepEqual(charger.tickets[0]?.tags, ["Cotización de repuestos"], "repuestos que ya iban a suministros también se etiquetan");
   });
 
   await test("personalidad: lo que pide el equipo entra al prompt y las frases prohibidas se detectan", async () => {

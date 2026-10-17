@@ -17,6 +17,7 @@ interface NewTicket {
   device: string;
   issue: string;
   estimate: ServiceEstimate | null;
+  tags?: string[];
 }
 
 /** Crea el ticket, alerta en el panel y avisa al equipo por correo (si falla, alerta y sigue). */
@@ -30,6 +31,7 @@ export async function createServiceTicket(data: NewTicket) {
     chatPhone: data.chatPhone || "",
     device: data.device,
     issue: data.issue,
+    tags: data.tags || [],
     category: data.estimate?.label || "",
     priceMin: data.estimate?.priceMin ?? null,
     priceMax: data.estimate?.priceMax ?? null,
@@ -37,7 +39,7 @@ export async function createServiceTicket(data: NewTicket) {
     statusHistory: [{ status: "nuevo", by: data.channel === "whatsapp_bot" ? "Bot" : "Panel", at: new Date() }],
   });
 
-  const kind = data.type === "suministros" ? "Suministros" : "Servicio técnico";
+  const kind = data.tags?.length ? data.tags[0] : data.type === "suministros" ? "Suministros" : "Servicio técnico";
   const price = data.estimate?.priceMin != null ? ` · ref. $${data.estimate.priceMin}–$${data.estimate.priceMax}` : "";
   const link = `/admin/tickets?ticket=${encodeURIComponent(ticket.ticketNumber || "")}`;
   createAlert("ticket_new", `🛠️ ${kind} ${ticket.ticketNumber}: ${data.customerName || data.customerPhone}`, `${data.type === "servicio_tecnico" ? `${deviceLabel(data.device)} · ` : ""}${data.issue}${price}`, link);

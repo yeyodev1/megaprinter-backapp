@@ -206,6 +206,14 @@ Se revisaron ~45 conversaciones de producción (`pnpm bot:logs -- --limit 5000`)
 - **Elección**: "Epson" con la lista a la vista elige entre las opciones mostradas (antes agregó otro modelo). "Me quedo con la opción 1" sin opciones en el chat (se las dio un asesor) pasa a una persona.
 - **IA**: preguntar precio o disponibilidad ya no agrega al carrito; nunca dice "solo vendemos X".
 
+## Cambio de piezas: taller o cotización de repuesto
+
+Si el cliente pide cambiar una pieza de laptop o PC ("Cambio de pantalla de una Dell", "una pantalla para mi laptop"),
+Mila deduce el equipo (marca + pieza = laptop) y ofrece **1.** cambio en el taller o **2.** cotización de repuesto.
+Con 2 (o "cuánto cuesta", "solo la pantalla") el ticket va como suministros con la etiqueta automática
+**Cotización de repuestos** (`tags`); los repuestos que ya iban a suministros (cargador, batería…) también la llevan.
+Caso real: Ramiro Cevallos, 16-oct.
+
 ## Variables de entorno
 
 | Variable | Para qué |

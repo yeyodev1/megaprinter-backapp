@@ -19,6 +19,8 @@ const serviceTicketSchema = new Schema(
     // Equipo (impresora, laptop, pc, monitor, camara) y lo que le pasa, con las palabras del cliente.
     device: { type: String, default: "" },
     issue: { type: String, default: "" },
+    // Etiquetas automaticas del bot (p. ej. "Cotización de repuestos").
+    tags: [{ type: String, trim: true }],
     // Categoria detectada y precio sugerido (rango en USD) que se le mostro al cliente.
     category: { type: String, default: "" },
     priceMin: { type: Number, default: null },

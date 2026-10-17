@@ -21,6 +21,8 @@ const serviceTicketSchema = new Schema(
     issue: { type: String, default: "" },
     // Etiquetas automaticas del bot (p. ej. "Cotización de repuestos").
     tags: [{ type: String, trim: true }],
+    // Fotos que mando el cliente durante la solicitud (Cloudinary).
+    photos: [{ type: String, trim: true }],
     // Categoria detectada y precio sugerido (rango en USD) que se le mostro al cliente.
     category: { type: String, default: "" },
     priceMin: { type: Number, default: null },

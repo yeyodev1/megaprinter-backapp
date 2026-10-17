@@ -306,7 +306,7 @@ Devuelve SOLO JSON: {"kind":"receipt|product|other","description":"","searchQuer
 - kind "receipt": comprobante de transferencia, depósito o pago bancario, o captura de un pago con tarjeta aprobado (Payphone, voucher, "pago exitoso").
 - kind "product": muestra un equipo de tecnología o una publicación/anuncio de uno (lee el texto de la imagen: marca, modelo, specs, precio).
 - kind "other": cualquier otra cosa.
-- description: frase corta en español de lo que se ve (ej. "una impresora Epson L3250 negra", "una publicación de Instagram de una laptop HP 15").
+- description: frase corta en español de lo que se ve (ej. "una impresora Epson L3250 negra", "una publicación de Instagram de una laptop HP 15"). Si es una pieza o repuesto, dilo (ej. "una pantalla de laptop rota", "un cargador Lenovo 65W"). Si se ve una etiqueta, placa o pantalla con texto, copia marca, modelo y número de parte o serie tal cual (ej. "etiqueta de una laptop Dell Inspiron 15 3520, P/N 0X1Y2Z").
 - searchQuery: si es product, marca + tipo + modelo (ej. "impresora epson l3250"); si no, "".
 - matches: si es product, hasta 3 números [ref] del CATÁLOGO que sean ese mismo equipo o los más parecidos (mismo tipo y gama), del más al menos parecido. [] si ninguno se parece. NUNCA inventes refs.
 - exactMatch: true solo si el primer ref es exactamente el mismo modelo de la imagen.`;
@@ -334,7 +334,7 @@ export async function describeImage(
     system: `${IMAGE_PROMPT}\n\nCATÁLOGO:\n${list || "(vacío)"}${learned ? `\n\nFOTOS ANTERIORES YA CONFIRMADAS (aprende de ellas; si la imagen se parece, usa el mismo ref):\n${learned}` : ""}`,
     text: "Analiza la imagen del cliente.",
     image: { mimeType: file.mimeType, base64: file.buffer.toString("base64") },
-    maxOutputTokens: 300,
+    maxOutputTokens: 400,
     timeoutMs: 15000,
   });
   if (!parsed) return null;
@@ -344,7 +344,7 @@ export async function describeImage(
     : [];
   return {
     kind,
-    description: String(parsed.description || "").slice(0, 160),
+    description: String(parsed.description || "").slice(0, 240),
     searchQuery: kind === "product" ? String(parsed.searchQuery || "").slice(0, 120) : "",
     productIds,
     exactMatch: productIds.length > 0 && parsed.exactMatch === true,

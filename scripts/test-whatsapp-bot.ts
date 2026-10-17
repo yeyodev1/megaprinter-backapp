@@ -868,6 +868,19 @@ async function main() {
     assert.deepEqual(charger.tickets[0]?.tags, ["Cotización de repuestos"], "repuestos que ya iban a suministros también se etiquetan");
   });
 
+  await test("cotización de repuesto con foto: la lee, la anota y la adjunta al ticket", async () => {
+    const fake = fakeDeps({
+      receipt: { status: "image", kind: "other", description: "una pantalla de laptop Dell Inspiron 15 3520, P/N 0X1Y2Z", searchQuery: "", productIds: [], exactMatch: false, photoUrl: "https://res.cloudinary.com/x/foto.jpg" },
+    });
+    const turns = await conversation(fake, ["hola", "7", { media: "https://x.test/f.jpg" }, "Ramiro Cevallos", "sí"]);
+    assert.equal(turns[2].decision, "R1:foto_del_ticket");
+    assert.match(turns[2].reply, /Veo una pantalla de laptop Dell Inspiron 15 3520, P\/N 0X1Y2Z[\s\S]*cotizar el repuesto exacto/);
+    assert.equal(turns[2].step, "ticket_name", "la foto ya cuenta qué repuesto necesita");
+    assert.match(turns[3].reply, /Cotización de repuestos[\s\S]*Foto: una pantalla de laptop Dell Inspiron 15 3520/);
+    assert.deepEqual(fake.tickets[0].photos, ["https://res.cloudinary.com/x/foto.jpg"]);
+    assert.deepEqual(fake.tickets[0].tags, ["Cotización de repuestos"]);
+  });
+
   await test("personalidad: lo que pide el equipo entra al prompt y las frases prohibidas se detectan", async () => {
     assert.equal(personaForPrompt({ personality: "", alwaysSay: [], neverSay: [] }), "");
     const block = personaForPrompt({ personality: "Seria pero cálida", alwaysSay: ["Ofrece el retiro en tienda"], neverSay: ['Nunca digas "mi amor"'] });

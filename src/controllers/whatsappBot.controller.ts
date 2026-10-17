@@ -333,12 +333,13 @@ async function receiveMedia(phone: string, orderId: string, mediaUrl: string): P
     const insight = await describeImage(file, catalog, examples);
     if (!insight || insight.kind === "receipt") return storeReceipt();
 
-    // Foto de producto: se guarda (copia en Cloudinary) para que la vista aprenda de lo que elija el cliente o corrija el equipo.
+    // Copia propia de la foto (la URL de BuilderBot vence): va al ticket si es de una solicitud y a la vista si es un producto.
+    const photoUrl = await uploadCustomerPhoto(file).catch(() => "");
     const photoMatchId =
       insight.kind === "product"
         ? await recordPhoto({
             phone,
-            imageUrl: await uploadCustomerPhoto(file).catch(() => ""),
+            imageUrl: photoUrl,
             description: insight.description,
             searchQuery: insight.searchQuery,
             suggestedIds: insight.productIds,
@@ -354,6 +355,7 @@ async function receiveMedia(phone: string, orderId: string, mediaUrl: string): P
       productIds: insight.productIds,
       exactMatch: insight.exactMatch,
       photoMatchId,
+      photoUrl,
       pendingOrderNumber: order?.orderNumber || undefined,
     };
   } catch (error) {

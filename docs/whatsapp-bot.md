@@ -214,6 +214,13 @@ Con 2 (o "cuánto cuesta", "solo la pantalla") el ticket va como suministros con
 **Cotización de repuestos** (`tags`); los repuestos que ya iban a suministros (cargador, batería…) también la llevan.
 Caso real: Ramiro Cevallos, 16-oct.
 
+## Fotos durante una solicitud (servicio, suministros, repuestos)
+
+Si el cliente manda una foto en medio de un ticket, la IA la lee (pieza, marca, modelo y número de parte o serie de
+la etiqueta) y Mila responde "Recibí tu foto 📎 Veo …". Lo que ve entra al detalle (`Foto: …`); en el paso del
+problema, la foto ya es la respuesta. La copia en Cloudinary (`megaprinter/customer-photos`) queda en `ticket.photos`,
+en el correo al equipo y en el detalle del ticket del panel.
+
 ## Variables de entorno
 
 | Variable | Para qué |

@@ -18,6 +18,7 @@ interface NewTicket {
   issue: string;
   estimate: ServiceEstimate | null;
   tags?: string[];
+  photos?: string[];
 }
 
 /** Crea el ticket, alerta en el panel y avisa al equipo por correo (si falla, alerta y sigue). */
@@ -32,6 +33,7 @@ export async function createServiceTicket(data: NewTicket) {
     device: data.device,
     issue: data.issue,
     tags: data.tags || [],
+    photos: data.photos || [],
     category: data.estimate?.label || "",
     priceMin: data.estimate?.priceMin ?? null,
     priceMax: data.estimate?.priceMax ?? null,
@@ -52,6 +54,7 @@ export async function createServiceTicket(data: NewTicket) {
        <p><strong>Cliente:</strong> ${escapeHtml(data.customerName)} · ${escapeHtml(data.customerPhone)}</p>
        ${data.type === "servicio_tecnico" ? `<p><strong>Equipo:</strong> ${escapeHtml(deviceLabel(data.device))}</p>` : ""}
        <p><strong>Detalle:</strong> ${escapeHtml(data.issue)}</p>
+       ${data.photos?.length ? `<p><strong>Fotos del cliente:</strong> ${data.photos.map((url, index) => `<a href="${escapeHtml(url)}">foto ${index + 1}</a>`).join(" · ")}</p>` : ""}
        ${price ? `<p><strong>Precio referencial mostrado:</strong> $${data.estimate!.priceMin}–$${data.estimate!.priceMax} (${escapeHtml(data.estimate!.label)})</p>` : ""}
        <p>El cliente espera que un asesor tome el chat de WhatsApp.</p>
        <p><a href="${webUrl()}${link}">Abrir el ticket en el panel</a></p>`,

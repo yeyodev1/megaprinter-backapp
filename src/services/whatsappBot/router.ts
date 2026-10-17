@@ -58,6 +58,8 @@ export interface BotState {
     optionTries?: number;
     /** Etiqueta automatica del ticket (p. ej. "Cotización de repuestos"). */
     tag?: string;
+    /** Fotos que mando durante la solicitud (copias en Cloudinary). */
+    photos?: string[];
   };
   /** Ultima lista numerada que se eligio: "3" al pedir el nombre puede ser "ver el catalogo" de esa lista. */
   lastOptions?: Array<{ productId: string; name: string; price: number }>;
@@ -168,6 +170,8 @@ export type ReceiptOutcome =
       exactMatch: boolean;
       /** Foto guardada para el aprendizaje de la vista (PhotoMatch). */
       photoMatchId?: string;
+      /** Copia de la foto en Cloudinary (se adjunta al ticket). */
+      photoUrl?: string;
       /** Pedido por transferencia que sigue esperando comprobante (para recordarlo). */
       pendingOrderNumber?: string;
     }
@@ -203,6 +207,8 @@ export interface TicketDraft {
   estimate: ServiceEstimate | null;
   /** Etiquetas automaticas ("Cotización de repuestos"). */
   tags: string[];
+  /** Fotos que mando el cliente durante la solicitud. */
+  photos: string[];
 }
 
 export interface BotDeps {
@@ -922,6 +928,7 @@ async function handleTicketStep(state: BotState, message: string, deps: BotDeps)
         issue: state.ticket.issue,
         estimate,
         tags: state.ticket.tag ? [state.ticket.tag] : [],
+        photos: state.ticket.photos || [],
       });
       const kind = state.ticket.tag === PARTS_TAG ? "cotización de repuesto" : state.ticket.type === "suministros" ? "solicitud de suministros" : "ticket de servicio técnico";
       state.stage = "idle";
@@ -966,8 +973,21 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
     }
     // Foto de SU equipo en medio de una solicitud de servicio (pantalla rota, error): no es para comprar
     // (chats reales oct-15: "laptop HP con la pantalla dañada… Cuál te agrego al carrito?").
+    // La foto se lee: lo que se ve (pieza, marca, modelo, numero de parte de la etiqueta) entra a la solicitud.
     if (outcome.status === "image" && isTicketStage(state.stage)) {
-      return askTicketNext(state, deps, "R1:foto_del_ticket", "Recibí tu foto 📎 El técnico la revisa junto con tu solicitud.");
+      const seen = outcome.description.trim();
+      if (outcome.photoUrl) state.ticket.photos = [...(state.ticket.photos || []), outcome.photoUrl].slice(-5);
+      if (seen) {
+        const note = `Foto: ${seen}`;
+        // En el paso del problema la foto ES la respuesta ("esto necesito"); en otros pasos se suma al detalle.
+        if (state.stage === "ticket_issue" || !state.ticket.issue) state.ticket.issue = note.slice(0, 500);
+        else state.ticket.issue = `${state.ticket.issue}. ${note}`.slice(0, 500);
+      }
+      const parts = state.ticket.tag === PARTS_TAG;
+      const intro = seen
+        ? `Recibí tu foto 📎 Veo ${seen.replace(/^(un|una|el|la)\s/i, (article) => article.toLowerCase())}. ${parts ? "La uso para cotizar el repuesto exacto 🔧" : "El técnico la revisa junto con tu solicitud."}`
+        : "Recibí tu foto 📎 El técnico la revisa junto con tu solicitud.";
+      return askTicketNext(state, deps, "R1:foto_del_ticket", intro);
     }
     if (outcome.status === "image" && outcome.kind === "product") {
       const catalog = await deps.loadCatalog();

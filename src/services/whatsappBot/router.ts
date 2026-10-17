@@ -57,6 +57,8 @@ export interface BotState {
   offeredHuman: boolean;
   /** La ultima respuesta mostro el menu principal numerado. */
   menuShown: boolean;
+  /** Lista que salio de una foto del cliente: si elige, la vista aprende que acerto. */
+  photoMatchId?: string;
 }
 
 export const createInitialState = (): BotState => ({
@@ -149,6 +151,8 @@ export type ReceiptOutcome =
       searchQuery: string;
       productIds: string[];
       exactMatch: boolean;
+      /** Foto guardada para el aprendizaje de la vista (PhotoMatch). */
+      photoMatchId?: string;
       /** Pedido por transferencia que sigue esperando comprobante (para recordarlo). */
       pendingOrderNumber?: string;
     }
@@ -848,6 +852,7 @@ export async function handleTurn(previous: BotState, input: TurnInput, deps: Bot
       const byId = new Map(catalog.map((product) => [product.id, product]));
       const matched = outcome.productIds.map((id) => byId.get(id)).filter((product): product is BotProduct => Boolean(product));
       const found = matched.length ? matched : searchProducts(catalog, outcome.searchQuery || outcome.description, 3);
+      state.photoMatchId = outcome.photoMatchId || undefined;
       if (found.length && outcome.exactMatch) {
         return showOptions(state, found.slice(0, 1), "R1:foto_producto_exacto", `Sí lo tenemos! 🙌✨ Veo ${outcome.description}:`);
       }

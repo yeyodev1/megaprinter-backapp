@@ -129,6 +129,21 @@ Vercel, el backend manda cada foto con su título por la API de mensajes de Buil
 Solo responde a un mensaje del cliente, nunca escribe primero. Sin la llave, o si una foto falla, esa foto va
 como link dentro de `message` (nodos HTTP con `split` e `interpretLinks` activos).
 
+## Aprendizaje automático (Sistema → Aprendizaje)
+
+- **Al momento:** si en un turno Mila no entiende, el cliente repite su mensaje o el chat pasa a un asesor, después
+  de responder (`waitUntil`, no demora al cliente) la IA revisa ese chat de las últimas 6 h y propone hasta 3 lecciones
+  (`learnFromChat`, colección `botchatreviews`, máx. una revisión por teléfono cada 20 min). Mismas reglas que la
+  revisión diaria: las de entender/evitar se activan solas; las que afirman algo del negocio esperan aprobación.
+  Las lecciones entran al prompt en ≤ 1 min. El cron de las 7:00 sigue revisando el día completo.
+- **La vista (fotos):** cada foto de producto se guarda (`photomatches`, copia en Cloudinary `megaprinter/customer-photos`)
+  con lo que propuso la IA. Si el cliente elige un producto de esa lista → *confirmada*; si el equipo dice en el panel
+  cuál era (o que no está en el catálogo) → *corregida*. Las últimas 40 van como ejemplos al analizar la siguiente foto,
+  incluyendo lo que NO era.
+- **Personalidad (solo admin):** tono, "siempre" y "nunca" (`botpersonas`, `_id: "persona"`). Entra en el prompt del
+  extractor y en el de la voz; si la voz usa una frase prohibida entre comillas, se envía el texto original.
+  Las reglas fijas (precios de reparación, Meta, pasos del pedido) siguen mandando.
+
 ## Flujos en BuilderBot (6 flujos)
 
 **`/brain` solo decide** a qué flujo va el mensaje (`route`); no responde ni toca el pedido. Cada

@@ -16,6 +16,7 @@ import { builderBotHistory, latestUserMessage, phoneVariants, readMediaUrl, toE1
 import { extractChoice, extractQuantity, detectPaymentMethod, wantsOptOut } from "../src/services/whatsappBot/intents";
 import { estimateService } from "../src/services/whatsappBot/serviceCatalog";
 import { lessonsForPrompt, reviewLesson } from "../src/services/whatsappBot/learning";
+import { bannedPhrases, personaForPrompt } from "../src/services/whatsappBot/persona";
 import { transcriptsForPrompt } from "../src/services/botLearning.service";
 
 const CATALOG: BotProduct[] = [
@@ -833,6 +834,20 @@ async function main() {
     assert.equal(fake.tickets[0].type, "suministros");
     assert.equal((await conversation(fake, ["quiero que alguien me ayude"]))[0].route, "human");
     assert.equal((await conversation(fake, ["donde les pago"]))[0].decision, "R3:datos_cuenta");
+  });
+
+  await test("personalidad: lo que pide el equipo entra al prompt y las frases prohibidas se detectan", async () => {
+    assert.equal(personaForPrompt({ personality: "", alwaysSay: [], neverSay: [] }), "");
+    const block = personaForPrompt({ personality: "Seria pero cálida", alwaysSay: ["Ofrece el retiro en tienda"], neverSay: ['Nunca digas "mi amor"'] });
+    assert.match(block, /Seria pero cálida[\s\S]*Siempre:\n- Ofrece el retiro[\s\S]*Nunca digas ni hagas:\n- Nunca digas "mi amor"/);
+    assert.deepEqual(bannedPhrases({ personality: "", alwaysSay: [], neverSay: ['Nunca digas "mi amor" ni “corazón”', "no tutees"] }), ["mi amor", "corazón"]);
+  });
+
+  await test("vista: la foto de producto guarda el id y la lista lo recuerda para aprender", async () => {
+    const fake = fakeDeps({ receipt: { status: "image", kind: "product", description: "una laptop HP", searchQuery: "laptop hp", productIds: ["p1"], exactMatch: true, photoMatchId: "foto1" } });
+    const [turn] = await conversation(fake, [{ media: "https://x.test/f.jpg" }]);
+    assert.equal(turn.decision, "R1:foto_producto_exacto");
+    assert.equal(turn.state.photoMatchId, "foto1");
   });
 
   await test("fotos: la lista manda la foto de cada producto que la tiene cargada", async () => {

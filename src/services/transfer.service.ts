@@ -181,6 +181,18 @@ async function uploadReceipt(file: ReceiptFile, orderNumber: string): Promise<st
   return result.secure_url;
 }
 
+/** Foto de producto que mando un cliente: copia propia para el panel de aprendizaje. */
+export async function uploadCustomerPhoto(file: ReceiptFile): Promise<string> {
+  const result = await new Promise<UploadApiResponse>((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "megaprinter/customer-photos", resource_type: "image" },
+      (error, upload) => (error || !upload ? reject(error || new Error("Cloudinary upload failed")) : resolve(upload)),
+    );
+    stream.end(file.buffer);
+  });
+  return result.secure_url;
+}
+
 export interface ReceiptAnalysis {
   isReceipt: boolean | null;
   amountMatches: boolean | null;
@@ -303,11 +315,23 @@ Devuelve SOLO JSON: {"kind":"receipt|product|other","description":"","searchQuer
 export async function describeImage(
   file: ReceiptFile,
   catalog: Array<{ id: string; name: string; price: number; category: string }> = [],
+  examples: Array<{ description: string; productId: string | null; wrongIds: string[] }> = [],
 ): Promise<ImageInsight | null> {
   if (!file.mimeType.startsWith("image/")) return null;
   const list = catalog.map((product, index) => `[${index}] ${product.name} | ${product.category} | $${product.price.toFixed(2)}`).join("\n");
+  const indexOf = new Map(catalog.map((product, index) => [product.id, index]));
+  // Fotos que los clientes o el equipo ya confirmaron: la vista aprende de sus aciertos y errores.
+  const learned = examples
+    .map((example) => {
+      const right = example.productId != null && indexOf.has(example.productId) ? `era [${indexOf.get(example.productId)}]` : example.productId === null ? "no está en el catálogo" : "";
+      const wrong = example.wrongIds.filter((id) => indexOf.has(id)).map((id) => `[${indexOf.get(id)}]`);
+      if (!right) return "";
+      return `- "${example.description}" → ${right}${wrong.length ? ` (NO era ${wrong.join(", ")})` : ""}`;
+    })
+    .filter(Boolean)
+    .join("\n");
   const parsed = await geminiJson<any>({
-    system: `${IMAGE_PROMPT}\n\nCATÁLOGO:\n${list || "(vacío)"}`,
+    system: `${IMAGE_PROMPT}\n\nCATÁLOGO:\n${list || "(vacío)"}${learned ? `\n\nFOTOS ANTERIORES YA CONFIRMADAS (aprende de ellas; si la imagen se parece, usa el mismo ref):\n${learned}` : ""}`,
     text: "Analiza la imagen del cliente.",
     image: { mimeType: file.mimeType, base64: file.buffer.toString("base64") },
     maxOutputTokens: 300,

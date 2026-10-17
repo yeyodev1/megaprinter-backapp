@@ -1,5 +1,6 @@
 import { geminiJson } from "../gemini.service";
 import { botName, casualMarks } from "./router";
+import { bannedPhrases, personaForPrompt } from "./persona";
 
 /**
  * VOZ DE MILA CON IA.
@@ -82,12 +83,12 @@ Reglas estrictas:
 export async function naturalize(draft: string, recent: string[]): Promise<string> {
   if (!draft.trim()) return draft;
   const parsed = await geminiJson<{ message?: string }>({
-    system: VOICE_PROMPT(botName()),
+    system: `${VOICE_PROMPT(botName())}${personaForPrompt()}`,
     text: `Tus últimos mensajes (no los repitas):\n${recent.map((message) => `---\n${message}`).join("\n") || "(ninguno)"}\n\nBORRADOR:\n${draft}`,
     maxOutputTokens: 900,
     timeoutMs: 8000,
   });
   const message = typeof parsed?.message === "string" ? casualMarks(parsed.message.trim()) : "";
-  if (!message || message.length > draft.length * 1.3 + 60 || !keepsData(draft, message) || BANNED.test(message)) return draft;
+  if (!message || message.length > draft.length * 1.3 + 60 || !keepsData(draft, message) || BANNED.test(message) || bannedPhrases().some((phrase) => message.toLowerCase().includes(phrase))) return draft;
   return message;
 }

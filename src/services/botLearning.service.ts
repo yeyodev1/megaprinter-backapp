@@ -1,3 +1,4 @@
+import { BotChatReviewModel } from "../models/botChatReview.model";
 import { BotEventModel } from "../models/botEvent.model";
 import { BotLearningRunModel } from "../models/botLearningRun.model";
 import { BotLessonModel } from "../models/botLesson.model";
@@ -222,4 +223,70 @@ ${dev ? `<h3>🛠️ Para el desarrollador</h3><ul>${dev}</ul>` : ""}
 </div>`;
   const to = (process.env.LEARNING_EMAIL || "dreyes@bakano.ec").split(",").map((item) => item.trim()).filter(Boolean);
   return sendEmail(to, `🧠 Mila ${result.date}: ${result.added.length} lecciones nuevas, no entendió ${pct(m.notUnderstood, m.messages)}`, html);
+}
+
+// ─── Aprendizaje al momento (un chat) ────────────────────────────────────────
+
+/** Tope por telefono: un chat trabado no dispara una revision por cada mensaje. */
+const CHAT_REVIEW_GAP_MS = 20 * 60 * 1000;
+const CHAT_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+const CHAT_PROMPT = PROMPT.replace("Te paso los chats de un día (los más problemáticos primero).", "Te paso UNA conversación que acaba de salir mal.")
+  .replace("- Máximo 8 lecciones, las de más impacto primero.", "- Máximo 3 lecciones, solo si de verdad enseñan algo nuevo.")
+  .replace(/- "mejorasCodigo":[^\n]*\n/, "")
+  .replace('- "resumen": 2 o 3 frases de cómo le fue a Mila ese día.', '- "resumen": 1 frase de qué salió mal.')
+  .replace(',"mejorasCodigo":["..."]', "");
+
+/**
+ * Revisa el chat de `phone` apenas sale mal (no entendio, repitio o paso a
+ * asesor) y guarda lecciones: las que solo enseñan a entender se activan al
+ * instante, las que afirman algo del negocio esperan aprobacion en el panel.
+ * Nunca lanza.
+ */
+export async function learnFromChat(phone: string, trigger: string) {
+  try {
+    if (!geminiEnabled() || isTestPhone(phone)) return null;
+    const recentReview = await BotChatReviewModel.exists({ phone, createdAt: { $gte: new Date(Date.now() - CHAT_REVIEW_GAP_MS) } });
+    if (recentReview) return null;
+    const review = await BotChatReviewModel.create({ phone, trigger });
+    const events: any[] = await BotEventModel.find(
+      { phone, kind: "turn", duplicated: { $ne: true }, createdAt: { $gte: new Date(Date.now() - CHAT_WINDOW_MS) } },
+      { message: 1, reply: 1, decision: 1, route: 1, createdAt: 1 },
+    )
+      .sort({ createdAt: 1 })
+      .lean();
+    if (!events.length) return null;
+    const existing: any[] = await BotLessonModel.find({}, { kind: 1, text: 1, status: 1 }).sort({ updatedAt: -1 }).limit(300).lean();
+    const parsed = await geminiJson<any>({
+      system: CHAT_PROMPT.replace("{{STORE}}", storeFactsForPrompt()),
+      text: [
+        `Lecciones que ya existen (no las repitas; las "descartada" el equipo no las quiso):\n${existing.map((lesson) => `- [${lesson.kind}/${lesson.status}] ${lesson.text}`).join("\n") || "(ninguna)"}`,
+        `CHAT:\n${transcriptsForPrompt([{ phone, events, problems: 1 }], 20_000)}`,
+      ].join("\n\n"),
+      maxOutputTokens: 2000,
+      thinkingBudget: 1024,
+      timeoutMs: 30_000,
+    });
+    if (!parsed) {
+      await BotChatReviewModel.updateOne({ _id: review._id }, { $set: { error: "La IA no respondió" } });
+      return null;
+    }
+    const known = existing.map((lesson) => String(lesson.text));
+    const added: LearningResult["added"] = [];
+    for (const raw of (Array.isArray(parsed.lecciones) ? parsed.lecciones : []).slice(0, 3)) {
+      const reviewed = reviewLesson(raw, known);
+      if (!reviewed) continue;
+      await BotLessonModel.create({ ...reviewed.lesson, status: reviewed.status, source: "auto", learnedFrom: ecuadorDate(0), reason: reviewed.reason || "Aprendida al momento de un chat" });
+      known.push(reviewed.lesson.text);
+      added.push({ kind: reviewed.lesson.kind, text: reviewed.lesson.text, status: reviewed.status, reason: reviewed.reason });
+    }
+    if (added.length) lessonsChanged();
+    const summary = typeof parsed.resumen === "string" ? parsed.resumen.trim().slice(0, 500) : "";
+    await BotChatReviewModel.updateOne({ _id: review._id }, { $set: { summary, added } });
+    console.log(`[aprendizaje] ${phone} (${trigger}) → ${added.length} lecciones nuevas`);
+    return { summary, added };
+  } catch (error) {
+    console.error("[aprendizaje] no se pudo revisar el chat:", error instanceof Error ? error.message : error);
+    return null;
+  }
 }

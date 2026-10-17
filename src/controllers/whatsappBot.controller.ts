@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { loadStore } from "../services/whatsappBot/store";
 import { loadLessons } from "../services/whatsappBot/learning";
+import { loadPersona } from "../services/whatsappBot/persona";
 import { Request, Response } from "express";
 import { OrderModel } from "../models/order.model";
 import { ProductModel } from "../models/product.model";
@@ -15,11 +16,16 @@ import { escapeHtml, sendEmail, storeRecipients } from "../services/email.servic
 import { logBotEvent } from "../services/whatsappBot/activity";
 import { naturalize } from "../services/whatsappBot/voice";
 import { sendProductPhotos } from "../services/whatsappBot/photos";
+import { waitUntil } from "@vercel/functions";
+import { learnFromChat } from "../services/botLearning.service";
+import { NOT_UNDERSTOOD } from "../services/attentionReport.service";
+import { confirmPhotoByCustomer, loadPhotoExamples, recordPhoto } from "../services/whatsappBot/photoLearning";
 import { claimsPaid } from "../services/whatsappBot/intents";
 import {
   activeBankAccounts,
   attachReceipt,
   describeImage,
+  uploadCustomerPhoto,
   downloadReceipt,
   isAcceptedReceipt,
   mediaKindFromMime,
@@ -323,8 +329,22 @@ async function receiveMedia(phone: string, orderId: string, mediaUrl: string): P
 
     // Un PDF se trata como comprobante. Sin IA disponible, tambien (comportamiento seguro).
     if (!file.mimeType.startsWith("image/")) return storeReceipt();
-    const insight = await describeImage(file, await loadCatalog());
+    const [catalog, examples] = await Promise.all([loadCatalog(), loadPhotoExamples()]);
+    const insight = await describeImage(file, catalog, examples);
     if (!insight || insight.kind === "receipt") return storeReceipt();
+
+    // Foto de producto: se guarda (copia en Cloudinary) para que la vista aprenda de lo que elija el cliente o corrija el equipo.
+    const photoMatchId =
+      insight.kind === "product"
+        ? await recordPhoto({
+            phone,
+            imageUrl: await uploadCustomerPhoto(file).catch(() => ""),
+            description: insight.description,
+            searchQuery: insight.searchQuery,
+            suggestedIds: insight.productIds,
+            exactMatch: insight.exactMatch,
+          })
+        : "";
 
     return {
       status: "image",
@@ -333,6 +353,7 @@ async function receiveMedia(phone: string, orderId: string, mediaUrl: string): P
       searchQuery: insight.searchQuery,
       productIds: insight.productIds,
       exactMatch: insight.exactMatch,
+      photoMatchId,
       pendingOrderNumber: order?.orderNumber || undefined,
     };
   } catch (error) {
@@ -386,7 +407,7 @@ async function findOrders(phone: string, orderNumber?: string): Promise<OrderSum
 
 async function buildDeps(phone: string): Promise<BotDeps> {
   // Sucursales del panel (cache 1 min) y lecciones del aprendizaje diario (cache 5 min).
-  await Promise.all([loadStore(), loadLessons()]);
+  await Promise.all([loadStore(), loadLessons(), loadPersona()]);
   return {
     loadCatalog,
     extract: geminiEnabled() ? aiExtract : heuristicExtract,
@@ -503,6 +524,14 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
       await buildDeps(phone),
     );
 
+    // La vista aprende: eligio un producto de la lista que salio de su foto.
+    if (previous.photoMatchId) {
+      const chosen = result.decision.startsWith("R5:eleccion") ? result.state.cart.at(-1)?.productId : "";
+      if (chosen && previous.options.some((option) => option.productId === chosen)) await confirmPhotoByCustomer(previous.photoMatchId, chosen);
+      // Se olvida al elegir o al salir de la lista (si no llego otra foto en este turno).
+      if (result.state.photoMatchId === previous.photoMatchId && (chosen || result.state.stage !== "choosing")) delete result.state.photoMatchId;
+    }
+
     // Voz de Mila con IA: el mismo contenido, dicho distinto cada vez (sin repetir
     // sus ultimos mensajes). Con BOT_AI_VOICE=off se envia la plantilla tal cual.
     // El saludo y el menu van tal cual (texto acordado con el cliente): la IA les
@@ -511,6 +540,11 @@ async function runTurn(body: any): Promise<TurnOutcome | null> {
       const lastBotMessages = history.filter((entry: any) => entry.role === "assistant").slice(-3).map((entry: any) => String(entry.content));
       result.reply = await naturalize(result.reply, lastBotMessages);
     }
+
+    // El cliente repite lo mismo que en su mensaje anterior: Mila no le contesto lo que pedia (dispara el aprendizaje).
+    const lastUser = history.filter((entry: any) => entry.role === "user").at(-1);
+    const flat = (text: string) => text.toLowerCase().normalize("NFD").replace(/[^a-z0-9]/g, "");
+    if (message && lastUser && flat(message).length > 3 && flat(message) === flat(String(lastUser.content))) (result as TurnOutcome & { repeated?: boolean }).repeated = true;
 
     const userEntry = message || (mediaUrl ? "[archivo adjunto]" : "");
     if (userEntry) history.push({ role: "user", content: userEntry.slice(0, 2000), ...(mediaUrl ? { mediaUrl } : {}), createdAt: new Date() });
@@ -753,6 +787,10 @@ export async function whatsappBotTurn(req: Request, res: Response) {
         durationMs: Date.now() - startedAt,
       });
     }
+    // Aprendizaje al momento: si el chat salio mal, la IA lo revisa despues de responder (no demora al cliente).
+    const trigger = !result || (result as any).duplicated ? "" : NOT_UNDERSTOOD.test(result.decision) ? "no_entendio" : result.route === "human" && result.notifyTeam ? "asesor" : (result as any).repeated ? "repitio" : "";
+    if (trigger) waitUntil(learnFromChat(phone, trigger));
+
     // Fotos como imagen de WhatsApp antes del texto; las que no salgan van como link en el mensaje.
     if (result?.images?.length && !(result as any).duplicated) result.images = await sendProductPhotos(phone, result.images);
     res.json(toBotResponse(result));

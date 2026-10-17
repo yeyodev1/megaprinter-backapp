@@ -21,7 +21,7 @@ export interface Lesson {
 
 /** Tope de lecciones en el prompt: las mas recientes primero. */
 export const MAX_PROMPT_LESSONS = 40;
-const CACHE_MS = 5 * 60 * 1000;
+const CACHE_MS = 60 * 1000;
 
 let active: Lesson[] = [];
 let loadedAt = 0;
